@@ -8,7 +8,7 @@ import {
   Menu, X, LogIn, LogOut, UserPlus
 } from 'lucide-react';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://zoom-clone-4-zp2h.onrender.com';
 
 export default function Dashboard() {
   const router = useRouter();
