@@ -8,13 +8,11 @@ export default function RoomPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  // Extract room ID dynamically from /room/[id] or /room?id=...
-  const rawId = (params?.id || params?.roomId || searchParams?.get('id')) as string;
-  const roomId = rawId || 'main-room';
-
+  // State for room ID to handle hydration and prevent 'undefined' string
+  const [roomId, setRoomId] = useState<string>('');
   const [userName, setUserName] = useState<string>('');
   const [hasJoined, setHasJoined] = useState<boolean>(false);
-  
+
   const [micOn, setMicOn] = useState<boolean>(true);
   const [camOn, setCamOn] = useState<boolean>(true);
   const [copied, setCopied] = useState<boolean>(false);
@@ -22,7 +20,23 @@ export default function RoomPage() {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // 1. Check for logged-in user on mount
+  // 1. Resolve and validate Room ID
+  useEffect(() => {
+    const rawId = (params?.id || params?.roomId || searchParams?.get('id')) as string;
+
+    if (rawId && rawId !== 'undefined' && rawId !== 'null') {
+      setRoomId(rawId);
+    } else {
+      // Fallback room code if ID is missing or literally 'undefined'
+      const fallback = Math.random().toString(36).substring(2, 8);
+      setRoomId(fallback);
+      if (typeof window !== 'undefined') {
+        window.history.replaceState(null, '', `/room/${fallback}`);
+      }
+    }
+  }, [params, searchParams]);
+
+  // 2. Check for logged-in user on mount
   useEffect(() => {
     const savedUser = localStorage.getItem('zoom_clone_user');
     if (savedUser) {
@@ -38,7 +52,7 @@ export default function RoomPage() {
     }
   }, []);
 
-  // 2. Initialize Camera & Mic MediaStream when user enters room
+  // 3. Initialize Camera & Mic MediaStream when user enters room
   useEffect(() => {
     if (!hasJoined) return;
 
@@ -90,6 +104,7 @@ export default function RoomPage() {
 
   // Copy Meeting Link
   const copyMeetingLink = () => {
+    if (!roomId) return;
     const link = `${window.location.origin}/room/${roomId}`;
     navigator.clipboard.writeText(link);
     setCopied(true);
@@ -120,7 +135,7 @@ export default function RoomPage() {
           <div className="bg-[#16191e] border border-slate-800 p-6 rounded-2xl max-w-md w-full shadow-2xl">
             <h2 className="text-2xl font-bold mb-2 text-white">Join Meeting</h2>
             <p className="text-sm text-slate-400 mb-6">
-              Please enter your display name to join room <span className="font-mono text-blue-400">{roomId}</span>.
+              Please enter your display name to join room <span className="font-mono text-blue-400">{roomId || '...'}</span>.
             </p>
 
             <form onSubmit={handleGuestJoin} className="space-y-4">
@@ -154,7 +169,7 @@ export default function RoomPage() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
           </svg>
           <span className="text-xs font-mono text-slate-300">
-            Meeting ID: <span className="text-white font-semibold">{roomId}</span>
+            Meeting ID: <span className="text-white font-semibold">{roomId || 'Loading...'}</span>
           </span>
         </div>
 

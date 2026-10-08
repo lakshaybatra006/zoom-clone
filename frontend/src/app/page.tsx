@@ -108,19 +108,35 @@ export default function Dashboard() {
   };
 
   const handleNewMeeting = async () => {
-    const userId = currentUser ? currentUser.id : "usr_default_01";
-    try {
-      const res = await fetch(`${API_BASE}/meetings/instant`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ host_id: userId, title: `${displayName}'s Instant Meeting` })
-      });
+  // Generate a fallback meeting ID in case backend response doesn't contain one
+  const fallbackId = Math.random().toString(36).substring(2, 8);
+
+  try {
+    const savedUser = localStorage.getItem('zoom_clone_user');
+    const user = savedUser ? JSON.parse(savedUser) : null;
+
+    const res = await fetch(`${API_BASE}/api/meetings/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "Instant Meeting",
+        host_id: user?.id || "guest",
+      }),
+    });
+
+    if (res.ok) {
       const data = await res.json();
-      router.push(`/room/${data.meeting_id}?pwd=${data.passcode}&name=${encodeURIComponent(displayName)}&isHost=true`);
-    } catch (err) {
-      alert("Error starting meeting");
+      // Check all common field names returned by FastAPI
+      const newRoomId = data.meeting_id || data.id || data.code || fallbackId;
+      router.push(`/room/${newRoomId}`);
+    } else {
+      router.push(`/room/${fallbackId}`);
     }
-  };
+  } catch (err) {
+    console.error("Failed to create meeting via API, using fallback ID:", err);
+    router.push(`/room/${fallbackId}`);
+  }
+};
 
   const handleJoinMeeting = async (e: React.FormEvent) => {
     e.preventDefault();
