@@ -72,7 +72,8 @@ export default function Dashboard() {
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const endpoint = authMode === 'login' ? '/auth/login' : '/auth/signup';
+    // Added /api prefix to match Swagger route (/api/auth/login and /api/auth/signup)
+    const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/signup';
     const payload = authMode === 'login' 
       ? { email: authEmail, password: authPassword }
       : { email: authEmail, password: authPassword, name: authName };
