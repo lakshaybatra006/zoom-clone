@@ -1,20 +1,13 @@
-import random
-import string
+import os
 import uuid
-from datetime import datetime
-from typing import List
-
-from fastapi import FastAPI, Depends, HTTPException
+from typing import Dict, List, Optional
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-
-from app import models, schemas
-from app.database import engine, get_db
-
-models.Base.metadata.create_all(bind=engine)
+from pydantic import BaseModel
 
 app = FastAPI(title="Zoom Clone API")
 
+# Configure CORS for Vercel frontend and local development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,99 +16,168 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def generate_meeting_id():
-    return "".join([str(random.randint(0, 9)) for _ in range(10)])
+# In-memory storage for users and meeting rooms
+users_db: Dict[str, dict] = {}
+rooms_db: Dict[str, dict] = {}
+websocket_connections: Dict[str, List[WebSocket]] = {}
 
-def generate_passcode():
-    return "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+# Pydantic Schemas
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+    name: str
 
-# --- AUTH ENDPOINTS ---
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
-@app.post("/api/auth/signup", response_model=schemas.UserResponse)
-def signup(user_data: schemas.UserSignup, db: Session = Depends(get_db)):
-    existing = db.query(models.User).filter(models.User.email == user_data.email).first()
+class CreateMeetingRequest(BaseModel):
+    title: str
+    host_id: Optional[str] = "guest"
+
+class JoinRequest(BaseModel):
+    name: str
+    is_host: Optional[bool] = False
+    participant_id: Optional[str] = None
+
+class ActionRequest(BaseModel):
+    participant_id: str
+
+# ----------------- AUTH ENDPOINTS ----------------- #
+
+@app.post("/api/auth/signup")
+def signup(req: SignupRequest):
+    if req.email in users_db:
+        raise HTTPException(status_code=400, detail="User already exists with this email")
+    
+    user_id = str(uuid.uuid4())
+    user_data = {
+        "id": user_id,
+        "email": req.email,
+        "password": req.password,
+        "name": req.name
+    }
+    users_db[req.email] = user_data
+    return {"id": user_id, "email": req.email, "name": req.name}
+
+@app.post("/api/auth/login")
+def login(req: LoginRequest):
+    user = users_db.get(req.email)
+    if not user or user["password"] != req.password:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    return {"id": user["id"], "email": user["email"], "name": user["name"]}
+
+# ----------------- MEETING ENDPOINTS ----------------- #
+
+@app.post("/api/meetings/create")
+def create_meeting(req: CreateMeetingRequest):
+    meeting_id = str(uuid.uuid4())[:6]
+    rooms_db[meeting_id] = {
+        "meeting_id": meeting_id,
+        "title": req.title,
+        "host_id": req.host_id,
+        "host_name": None,
+        "participants": {}
+    }
+    return {"meeting_id": meeting_id, "title": req.title, "host_id": req.host_id}
+
+@app.post("/api/meetings/{room_id}/join")
+def join_meeting(room_id: str, req: JoinRequest):
+    if room_id not in rooms_db:
+        rooms_db[room_id] = {
+            "meeting_id": room_id,
+            "title": "Instant Meeting",
+            "host_id": "guest",
+            "host_name": req.name,
+            "participants": {}
+        }
+        status = "admitted"
+        is_host = True
+    else:
+        room = rooms_db[room_id]
+        if room["host_name"] is None or req.is_host:
+            room["host_name"] = req.name
+            status = "admitted"
+            is_host = True
+        elif req.name == room["host_name"]:
+            status = "admitted"
+            is_host = True
+        else:
+            status = "waiting" # Guests go to Waiting Room for host approval
+            is_host = False
+
+    pid = req.participant_id or f"p_{str(uuid.uuid4())[:8]}"
+    
+    # Preserve status if participant already exists in room
+    existing = rooms_db[room_id]["participants"].get(pid)
     if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    user_id = f"usr_{uuid.uuid4().hex[:8]}"
-    user = models.User(
-        id=user_id,
-        email=user_data.email,
-        name=user_data.name
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
+        status = existing["status"]
 
-@app.post("/api/auth/login", response_model=schemas.UserResponse)
-def login(credentials: schemas.UserLogin, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == credentials.email).first()
-    if not user:
-        raise HTTPException(status_code=400, detail="Invalid email or password")
-    return user
+    rooms_db[room_id]["participants"][pid] = {
+        "id": pid,
+        "name": req.name,
+        "status": status,
+        "is_host": is_host
+    }
 
-# --- MEETING ENDPOINTS ---
+    return {
+        "participant_id": pid,
+        "status": status,
+        "is_host": is_host,
+        "host_name": rooms_db[room_id]["host_name"]
+    }
 
-@app.post("/api/meetings/instant", response_model=schemas.MeetingResponse)
-def create_instant_meeting(req: schemas.InstantMeetingCreate, db: Session = Depends(get_db)):
-    meeting_id = generate_meeting_id()
-    passcode = generate_passcode()
-    invite_link = f"http://localhost:3000/room/{meeting_id}?pwd={passcode}"
+@app.get("/api/meetings/{room_id}/state")
+def get_room_state(room_id: str):
+    if room_id not in rooms_db:
+        return {"room_id": room_id, "host_name": None, "admitted": [], "waiting": []}
 
-    meeting = models.Meeting(
-        meeting_id=meeting_id,
-        title=req.title,
-        host_id=req.host_id,
-        scheduled_at=datetime.utcnow(),
-        duration_minutes=30,
-        status="active",
-        passcode=passcode,
-        invite_link=invite_link
-    )
-    db.add(meeting)
-    db.commit()
-    db.refresh(meeting)
-    return meeting
+    participants = list(rooms_db[room_id]["participants"].values())
+    admitted = [p for p in participants if p["status"] == "admitted"]
+    waiting = [p for p in participants if p["status"] == "waiting"]
 
-@app.post("/api/meetings/schedule", response_model=schemas.MeetingResponse)
-def schedule_meeting(req: schemas.ScheduleMeetingCreate, db: Session = Depends(get_db)):
-    meeting_id = generate_meeting_id()
-    passcode = generate_passcode()
-    invite_link = f"http://localhost:3000/room/{meeting_id}?pwd={passcode}"
+    return {
+        "room_id": room_id,
+        "host_name": rooms_db[room_id]["host_name"],
+        "admitted": admitted,
+        "waiting": waiting
+    }
 
-    meeting = models.Meeting(
-        meeting_id=meeting_id,
-        title=req.title,
-        description=req.description,
-        host_id=req.host_id,
-        scheduled_at=req.scheduled_at,
-        duration_minutes=req.duration_minutes or 30,
-        status="scheduled",
-        passcode=passcode,
-        invite_link=invite_link
-    )
-    db.add(meeting)
-    db.commit()
-    db.refresh(meeting)
-    return meeting
+@app.post("/api/meetings/{room_id}/admit")
+def admit_participant(room_id: str, req: ActionRequest):
+    if room_id in rooms_db and req.participant_id in rooms_db[room_id]["participants"]:
+        rooms_db[room_id]["participants"][req.participant_id]["status"] = "admitted"
+        return {"status": "success"}
+    raise HTTPException(status_code=404, detail="Participant not found")
 
-@app.get("/api/meetings/validate/{meeting_id}", response_model=schemas.MeetingResponse)
-def validate_meeting(meeting_id: str, db: Session = Depends(get_db)):
-    meeting = db.query(models.Meeting).filter(models.Meeting.meeting_id == meeting_id).first()
-    if not meeting:
-        raise HTTPException(status_code=404, detail="Meeting not found")
-    return meeting
+@app.post("/api/meetings/{room_id}/reject")
+def reject_participant(room_id: str, req: ActionRequest):
+    if room_id in rooms_db and req.participant_id in rooms_db[room_id]["participants"]:
+        del rooms_db[room_id]["participants"][req.participant_id]
+        return {"status": "success"}
+    raise HTTPException(status_code=404, detail="Participant not found")
 
-@app.get("/api/meetings/upcoming", response_model=List[schemas.MeetingResponse])
-def get_upcoming_meetings(user_id: str, db: Session = Depends(get_db)):
-    return db.query(models.Meeting).filter(
-        models.Meeting.host_id == user_id,
-        models.Meeting.status == "scheduled"
-    ).order_by(models.Meeting.scheduled_at.asc()).all()
+# ----------------- WEBSOCKET ENDPOINT ----------------- #
 
-@app.get("/api/meetings/recent", response_model=List[schemas.MeetingResponse])
-def get_recent_meetings(user_id: str, db: Session = Depends(get_db)):
-    return db.query(models.Meeting).filter(
-        models.Meeting.host_id == user_id,
-        models.Meeting.status == "active"
-    ).order_by(models.Meeting.created_at.desc()).limit(5).all()
+@app.websocket("/ws/{room_id}")
+async def websocket_endpoint(websocket: WebSocket, room_id: str):
+    await websocket.accept()
+    if room_id not in websocket_connections:
+        websocket_connections[room_id] = []
+    websocket_connections[room_id].append(websocket)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            # Broadcast incoming updates to all connected sockets in the room
+            for conn in websocket_connections.get(room_id, []):
+                if conn != websocket:
+                    await conn.send_text(data)
+    except WebSocketDisconnect:
+        if room_id in websocket_connections and websocket in websocket_connections[room_id]:
+            websocket_connections[room_id].remove(websocket)
+
+@app.get("/")
+def health_check():
+    return {"status": "ok", "service": "Zoom Clone FastAPI Backend"}
