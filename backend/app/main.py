@@ -16,7 +16,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory database & WebSocket tracker
+# In-memory database & WebSocket connection manager
 users_db: Dict[str, dict] = {}
 rooms_db: Dict[str, dict] = {}
 websocket_connections: Dict[str, List[WebSocket]] = {}
@@ -151,7 +151,6 @@ async def admit_participant(room_id: str, req: ActionRequest):
     if room_id in rooms_db and req.participant_id in rooms_db[room_id]["participants"]:
         p = rooms_db[room_id]["participants"][req.participant_id]
         p["status"] = "admitted"
-        # Broadcast admission to all sockets in room
         await broadcast_to_room(room_id, {"type": "admitted", "sender": p["name"], "participantId": req.participant_id})
         return {"status": "success"}
     raise HTTPException(status_code=404, detail="Participant not found")
@@ -186,7 +185,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             data = await websocket.receive_text()
             try:
                 msg = json.loads(data)
-                # If a client sends a leave message, clean up server state
                 if msg.get("type") == "leave":
                     sender_name = msg.get("sender")
                     if room_id in rooms_db:

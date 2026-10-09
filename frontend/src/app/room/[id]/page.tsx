@@ -5,7 +5,7 @@ import { useParams, useSearchParams, useRouter } from 'next/navigation';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://zoom-clone-4-zp2h.onrender.com";
 
-// TURN + STUN Servers Configuration for Cellular 5G/4G Traversal
+// Multi-protocol STUN + TURN configuration for Cellular 5G/4G & Wi-Fi NAT Traversal
 const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -61,6 +61,7 @@ interface ActiveReaction {
 // Remote Participant Video & Audio Tile Component
 function RemoteVideoTile({ peer, reaction }: { peer: RemotePeer; reaction?: ActiveReaction }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [audioBlocked, setAudioBlocked] = useState<boolean>(false);
 
   useEffect(() => {
     const videoEl = videoRef.current;
@@ -68,12 +69,24 @@ function RemoteVideoTile({ peer, reaction }: { peer: RemotePeer; reaction?: Acti
       videoEl.srcObject = peer.stream;
       const playPromise = videoEl.play();
       if (playPromise !== undefined) {
-        playPromise.catch((err) => {
-          console.warn('Tap required for remote media playback:', err);
-        });
+        playPromise
+          .then(() => setAudioBlocked(false))
+          .catch((err) => {
+            console.warn('Autoplay blocked by browser policy:', err);
+            setAudioBlocked(true);
+          });
       }
     }
   }, [peer.stream]);
+
+  const handleEnableAudio = () => {
+    if (videoRef.current) {
+      videoRef.current
+        .play()
+        .then(() => setAudioBlocked(false))
+        .catch((err) => console.error('Play error:', err));
+    }
+  };
 
   return (
     <div className="relative w-full h-full min-h-[300px] bg-[#12151b] border border-slate-800/80 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
@@ -83,7 +96,18 @@ function RemoteVideoTile({ peer, reaction }: { peer: RemotePeer; reaction?: Acti
         playsInline
         className="w-full h-full object-cover"
       />
-      <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium text-slate-200 border border-white/10 flex items-center gap-2">
+
+      {/* MOBILE AUTOPLAY FALLBACK OVERLAY */}
+      {audioBlocked && (
+        <button
+          onClick={handleEnableAudio}
+          className="absolute inset-0 m-auto w-max h-max bg-blue-600 hover:bg-blue-500 text-white text-xs px-4 py-2.5 rounded-xl font-semibold shadow-2xl z-30 animate-pulse border border-blue-400/50 flex items-center gap-2"
+        >
+          <span>🔊 Tap to Enable Video & Audio</span>
+        </button>
+      )}
+
+      <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium text-slate-200 border border-white/10 flex items-center gap-2 z-10">
         <span>{peer.name}</span>
       </div>
 
@@ -253,7 +277,7 @@ export default function RoomPage() {
     }
   }, [params, searchParams]);
 
-  // 2. Session restore
+  // 2. Load session user
   useEffect(() => {
     const savedUser = localStorage.getItem('zoom_clone_user');
     if (savedUser) {
@@ -360,7 +384,7 @@ export default function RoomPage() {
         }
         setLocalStreamReady(true);
       } catch (err) {
-        console.error('Camera/mic error:', err);
+        console.error('Camera/mic access error:', err);
         setLocalStreamReady(true);
       }
     }
@@ -374,7 +398,7 @@ export default function RoomPage() {
     };
   }, [myStatus]);
 
-  // 6. Real-Time WebRTC Signaling
+  // 6. Real-Time WebRTC Signaling (Deterministically handles offer generation)
   useEffect(() => {
     if (myStatus !== 'admitted' || !roomId || !userName || !localStreamReady) return;
 
@@ -404,7 +428,9 @@ export default function RoomPage() {
         }
 
         if (type === 'join' || type === 'admitted') {
-          createPeerConnection(sender, true);
+          // Deterministic Role Assignment: The peer with lexicographically greater name generates offer
+          const shouldOffer = userName.localeCompare(sender) > 0;
+          createPeerConnection(sender, shouldOffer);
         } else if (type === 'offer' && offer) {
           const pc = createPeerConnection(sender, false);
           await pc.setRemoteDescription(new RTCSessionDescription(offer));
@@ -477,13 +503,14 @@ export default function RoomPage() {
     };
   }, [myStatus, roomId, userName, myParticipantId, localStreamReady]);
 
-  // 7. Auto-connect WebRTC offer for all admitted peers
+  // 7. Auto-connect WebRTC with deterministic offer initiator role
   useEffect(() => {
     if (myStatus !== 'admitted' || !localStreamReady) return;
 
     admittedParticipants.forEach((p) => {
       if (p.name !== userName && !peerConnections.current[p.name]) {
-        createPeerConnection(p.name, true);
+        const shouldOffer = userName.localeCompare(p.name) > 0;
+        createPeerConnection(p.name, shouldOffer);
       }
     });
   }, [admittedParticipants, myStatus, localStreamReady, userName]);
@@ -502,7 +529,7 @@ export default function RoomPage() {
           setWaitingParticipants(data.waiting || []);
           if (data.host_name) setHostName(data.host_name);
 
-          // Purge any remote peer tiles and streams whose names are no longer in admittedList
+          // Purge any remote peer tiles whose names are no longer in admittedList
           const admittedNames = new Set(admittedList.map((p: Participant) => p.name));
           setRemotePeers((prev) => prev.filter((peer) => admittedNames.has(peer.name) || admittedNames.has(peer.peerId)));
 
@@ -908,7 +935,7 @@ export default function RoomPage() {
                       {p.name ? p.name.charAt(0).toUpperCase() : 'P'}
                     </div>
                     <span className="text-sm font-semibold text-slate-300">{p.name}</span>
-                    <span className="text-xs text-slate-500">Connecting video stream...</span>
+                    <span className="text-xs text-slate-500">Establishing audio & video stream...</span>
 
                     <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium text-slate-200 border border-white/10 flex items-center gap-2">
                       <span>{p.name} {p.is_host ? '(Host)' : ''}</span>
