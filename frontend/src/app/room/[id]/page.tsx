@@ -9,6 +9,7 @@ export default function HomePage() {
   const router = useRouter();
 
   const [currentUser, setCurrentUser] = useState<any>(null);
+  // Default ALWAYS to landing page on initial load
   const [viewMode, setViewMode] = useState<'landing' | 'dashboard'>('landing');
 
   // Auth Modal States
@@ -23,7 +24,7 @@ export default function HomePage() {
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [joinRoomId, setJoinRoomId] = useState('');
 
-  // Check for logged-in user on mount
+  // Load saved session info without automatically redirecting away from landing page
   useEffect(() => {
     const savedUser = localStorage.getItem('zoom_clone_user');
     if (savedUser) {
@@ -31,7 +32,7 @@ export default function HomePage() {
         const parsed = JSON.parse(savedUser);
         if (parsed) {
           setCurrentUser(parsed);
-          setViewMode('dashboard');
+          // Keep viewMode as 'landing' so Vercel always loads the landing page first!
         }
       } catch (e) {
         console.error("Failed to parse saved user", e);
@@ -65,7 +66,7 @@ export default function HomePage() {
       setCurrentUser(data);
       localStorage.setItem('zoom_clone_user', JSON.stringify(data));
       setShowAuthModal(false);
-      setViewMode('dashboard');
+      setViewMode('dashboard'); // Go to dashboard AFTER successful login/signup
       setAuthEmail('');
       setAuthPassword('');
       setAuthName('');
@@ -115,78 +116,66 @@ export default function HomePage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#07090e] text-white flex flex-col font-sans selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen bg-[#07090e] text-white flex flex-col font-sans">
       
-      {/* GLOBAL NAVBAR */}
-      <nav className="border-b border-slate-800/80 bg-[#07090e]/90 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-8">
-          <div 
-            onClick={() => setViewMode('landing')}
-            className="flex items-center gap-2 cursor-pointer select-none"
-          >
-            <div className="bg-blue-600 text-white p-1.5 rounded-lg">
-              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M4.5 4.5a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-3.586l3.293 3.293a1 1 0 001.414-1.414v-9.586a1 1 0 00-1.414-1.414L17.5 8.086V6.5a2 2 0 00-2-2h-11z" />
-              </svg>
-            </div>
-            <span className="text-2xl font-bold tracking-tight text-white">zoom</span>
-          </div>
-
-          <div className="hidden md:flex items-center gap-6 text-sm text-slate-300 font-medium">
-            <span className="hover:text-white cursor-pointer transition">Products</span>
-            <span className="hover:text-white cursor-pointer transition">Solutions</span>
-            <span className="hover:text-white cursor-pointer transition">Pricing</span>
-            <span className="hover:text-white cursor-pointer transition">Support</span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          {currentUser ? (
-            <>
-              {viewMode === 'landing' ? (
-                <button
-                  onClick={() => setViewMode('dashboard')}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-semibold transition"
-                >
-                  Go to Dashboard
-                </button>
-              ) : (
-                <button
-                  onClick={() => setViewMode('landing')}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-sm font-medium transition"
-                >
-                  View Marketing Site
-                </button>
-              )}
-              <button
-                onClick={handleLogout}
-                className="px-4 py-2 bg-slate-800 hover:bg-red-600/80 text-slate-200 rounded-lg text-sm font-medium transition"
-              >
-                Sign Out
-              </button>
-            </>
-          ) : (
-            <>
-              <button
-                onClick={() => { setAuthMode('login'); setShowAuthModal(true); }}
-                className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition"
-              >
-                Sign In
-              </button>
-              <button
-                onClick={() => { setAuthMode('signup'); setShowAuthModal(true); }}
-                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg shadow-lg shadow-blue-600/20 transition"
-              >
-                Sign Up Free
-              </button>
-            </>
-          )}
-        </div>
-      </nav>
-
-      {/* VIEW 1: PUBLIC ZOOM MARKETING LANDING PAGE */}
+      {/* 1. MARKETING LANDING PAGE VIEW */}
       {viewMode === 'landing' && (
-        <main className="flex-1 flex flex-col">
+        <div className="min-h-screen flex flex-col">
+          {/* HEADER */}
+          <nav className="border-b border-slate-800/80 bg-[#07090e]/90 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex items-center justify-between">
+            <div className="flex items-center gap-8">
+              <div className="flex items-center gap-2 select-none">
+                <div className="bg-blue-600 text-white p-1.5 rounded-lg">
+                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M4.5 4.5a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-3.586l3.293 3.293a1 1 0 001.414-1.414v-9.586a1 1 0 00-1.414-1.414L17.5 8.086V6.5a2 2 0 00-2-2h-11z" />
+                  </svg>
+                </div>
+                <span className="text-2xl font-bold tracking-tight text-white">zoom</span>
+              </div>
+
+              <div className="hidden md:flex items-center gap-6 text-sm text-slate-300 font-medium">
+                <span className="hover:text-white cursor-pointer transition">Products</span>
+                <span className="hover:text-white cursor-pointer transition">Solutions</span>
+                <span className="hover:text-white cursor-pointer transition">Pricing</span>
+                <span className="hover:text-white cursor-pointer transition">Support</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {currentUser ? (
+                <>
+                  <button
+                    onClick={() => setViewMode('dashboard')}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-semibold transition"
+                  >
+                    Go to Dashboard
+                  </button>
+                  <button
+                    onClick={handleLogout}
+                    className="px-4 py-2 bg-slate-800 hover:bg-red-600/80 text-slate-200 rounded-lg text-sm font-medium transition"
+                  >
+                    Sign Out
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => { setAuthMode('login'); setShowAuthModal(true); }}
+                    className="px-4 py-2 text-sm font-medium text-slate-300 hover:text-white transition"
+                  >
+                    Sign In
+                  </button>
+                  <button
+                    onClick={() => { setAuthMode('signup'); setShowAuthModal(true); }}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg shadow-lg shadow-blue-600/20 transition"
+                  >
+                    Sign Up Free
+                  </button>
+                </>
+              )}
+            </div>
+          </nav>
+
           {/* ANNOUNCEMENT BANNER */}
           <div className="bg-gradient-to-r from-blue-950 via-indigo-900 to-blue-950 border-b border-blue-800/40 py-2.5 px-4 text-center text-xs md:text-sm text-blue-200 flex items-center justify-center gap-2">
             <span>AI, CX, and beyond — Zoomtopia 2026 sessions are live!</span>
@@ -199,7 +188,7 @@ export default function HomePage() {
           </div>
 
           {/* HERO SECTION */}
-          <section className="relative px-6 pt-20 pb-24 max-w-6xl mx-auto text-center flex flex-col items-center">
+          <section className="relative px-6 pt-20 pb-24 max-w-6xl mx-auto text-center flex flex-col items-center flex-1">
             <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white mb-6 leading-tight max-w-4xl">
               Find out what's possible when work connects
             </h1>
@@ -209,7 +198,14 @@ export default function HomePage() {
 
             <div className="flex flex-wrap items-center justify-center gap-4">
               <button
-                onClick={handleStartInstantMeeting}
+                onClick={() => {
+                  if (currentUser) {
+                    handleStartInstantMeeting();
+                  } else {
+                    setAuthMode('login');
+                    setShowAuthModal(true);
+                  }
+                }}
                 className="px-8 py-3.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-xl text-base shadow-xl shadow-blue-600/25 transition"
               >
                 Start Instant Meeting
@@ -225,7 +221,7 @@ export default function HomePage() {
             {/* FEATURE CARDS ROW */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 w-full mt-20 text-left">
               <div className="bg-[#0f141f] border border-slate-800 p-6 rounded-2xl hover:border-blue-500/50 transition group">
-                <div className="w-12 h-12 bg-blue-600/10 border border-blue-500/20 rounded-xl flex items-center justify-center mb-4 text-blue-400 group-hover:scale-110 transition">
+                <div className="w-12 h-12 bg-blue-600/10 border border-blue-500/20 rounded-xl flex items-center justify-center mb-4 text-blue-400">
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
                 </div>
                 <h3 className="text-lg font-bold text-white mb-2">Meetings</h3>
@@ -233,7 +229,7 @@ export default function HomePage() {
               </div>
 
               <div className="bg-[#0f141f] border border-slate-800 p-6 rounded-2xl hover:border-blue-500/50 transition group">
-                <div className="w-12 h-12 bg-blue-600/10 border border-blue-500/20 rounded-xl flex items-center justify-center mb-4 text-blue-400 group-hover:scale-110 transition">
+                <div className="w-12 h-12 bg-blue-600/10 border border-blue-500/20 rounded-xl flex items-center justify-center mb-4 text-blue-400">
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                 </div>
                 <h3 className="text-lg font-bold text-white mb-2">Team Chat</h3>
@@ -241,7 +237,7 @@ export default function HomePage() {
               </div>
 
               <div className="bg-[#0f141f] border border-slate-800 p-6 rounded-2xl hover:border-blue-500/50 transition group">
-                <div className="w-12 h-12 bg-blue-600/10 border border-blue-500/20 rounded-xl flex items-center justify-center mb-4 text-blue-400 group-hover:scale-110 transition">
+                <div className="w-12 h-12 bg-blue-600/10 border border-blue-500/20 rounded-xl flex items-center justify-center mb-4 text-blue-400">
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                 </div>
                 <h3 className="text-lg font-bold text-white mb-2">Scheduler</h3>
@@ -249,7 +245,7 @@ export default function HomePage() {
               </div>
 
               <div className="bg-[#0f141f] border border-slate-800 p-6 rounded-2xl hover:border-blue-500/50 transition group">
-                <div className="w-12 h-12 bg-blue-600/10 border border-blue-500/20 rounded-xl flex items-center justify-center mb-4 text-blue-400 group-hover:scale-110 transition">
+                <div className="w-12 h-12 bg-blue-600/10 border border-blue-500/20 rounded-xl flex items-center justify-center mb-4 text-blue-400">
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
                 </div>
                 <h3 className="text-lg font-bold text-white mb-2">Security</h3>
@@ -257,66 +253,125 @@ export default function HomePage() {
               </div>
             </div>
           </section>
-        </main>
+        </div>
       )}
 
-      {/* VIEW 2: LOGGED-IN APP DASHBOARD */}
+      {/* 2. DASHBOARD VIEW (SHOWN AFTER SIGN IN) */}
       {viewMode === 'dashboard' && (
-        <div className="flex-1 max-w-6xl w-full mx-auto p-6 flex flex-col justify-between">
-          <div>
-            <div className="mb-8">
-              <h2 className="text-2xl font-bold">Welcome back, {currentUser?.name || 'User'}</h2>
-              <p className="text-sm text-slate-400">Manage your instant meetings and scheduled sessions.</p>
-            </div>
-
-            {/* ACTION GRID */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-12">
-              <button
-                onClick={handleStartInstantMeeting}
-                className="bg-orange-600 hover:bg-orange-500 text-white p-6 rounded-2xl flex flex-col items-center justify-center gap-3 shadow-xl transition"
+        <div className="flex h-screen bg-[#11141b] text-white overflow-hidden">
+          {/* SIDEBAR */}
+          <aside className="w-64 bg-[#181c26] border-r border-slate-800 flex flex-col justify-between p-4">
+            <div>
+              {/* BRANDING */}
+              <div 
+                onClick={() => setViewMode('landing')}
+                className="flex items-center gap-2 px-3 py-2 cursor-pointer mb-6"
               >
-                <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
-                <span className="font-bold text-lg">New Meeting</span>
-              </button>
-
-              <button
-                onClick={() => setShowJoinModal(true)}
-                className="bg-blue-600 hover:bg-blue-500 text-white p-6 rounded-2xl flex flex-col items-center justify-center gap-3 shadow-xl transition"
-              >
-                <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
-                <span className="font-bold text-lg">Join Meeting</span>
-              </button>
-
-              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col items-center justify-center gap-3 opacity-60">
-                <svg className="w-10 h-10 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                <span className="font-bold text-lg text-slate-300">Schedule</span>
+                <div className="bg-blue-600 text-white p-1 rounded">
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M4.5 4.5a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-3.586l3.293 3.293a1 1 0 001.414-1.414v-9.586a1 1 0 00-1.414-1.414L17.5 8.086V6.5a2 2 0 00-2-2h-11z" />
+                  </svg>
+                </div>
+                <span className="text-xl font-bold tracking-tight">zoom</span>
               </div>
 
-              <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col items-center justify-center gap-3 opacity-60">
-                <svg className="w-10 h-10 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" /></svg>
-                <span className="font-bold text-lg text-slate-300">Share Screen</span>
+              {/* NAV MENU */}
+              <nav className="space-y-1">
+                <button className="w-full flex items-center gap-3 px-4 py-2.5 bg-slate-800 text-white rounded-xl font-medium text-sm">
+                  <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  <span>Home</span>
+                </button>
+                <button className="w-full flex items-center gap-3 px-4 py-2.5 text-slate-400 hover:text-white hover:bg-slate-800/50 rounded-xl font-medium text-sm transition">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                  <span>Meetings</span>
+                </button>
+                <button className="w-full flex items-center gap-3 px-4 py-2.5 text-slate-400 hover:text-white hover:bg-slate-800/50 rounded-xl font-medium text-sm transition">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /></svg>
+                  <span>Settings</span>
+                </button>
+              </nav>
+            </div>
+
+            {/* LOGGED IN USER FOOTER */}
+            <div className="pt-4 border-t border-slate-800">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-9 h-9 rounded-full bg-blue-600 font-bold flex items-center justify-center text-white text-sm">
+                  {currentUser?.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
+                </div>
+                <div className="overflow-hidden">
+                  <div className="font-semibold text-sm truncate">{currentUser?.name || 'User'}</div>
+                  <div className="text-xs text-slate-400 truncate">{currentUser?.email || ''}</div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-xs pt-1">
+                <button
+                  onClick={() => setViewMode('landing')}
+                  className="text-slate-400 hover:text-white transition"
+                >
+                  Landing Page
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className="text-red-400 hover:text-red-300 font-medium transition"
+                >
+                  Sign Out
+                </button>
               </div>
             </div>
-          </div>
+          </aside>
 
-          {/* LOGGED IN USER FOOTER BANNER */}
-          <div className="bg-slate-900/80 border border-slate-800 p-4 rounded-xl flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-blue-600 font-bold flex items-center justify-center text-white">
-                {currentUser?.name ? currentUser.name.charAt(0).toUpperCase() : 'U'}
+          {/* MAIN DASHBOARD CONTENT */}
+          <main className="flex-1 p-8 overflow-y-auto">
+            <div className="max-w-5xl mx-auto">
+              {/* ACTION GRID */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                <button
+                  onClick={handleStartInstantMeeting}
+                  className="bg-orange-600 hover:bg-orange-500 text-white p-8 rounded-2xl flex flex-col items-center justify-center gap-4 shadow-xl transition"
+                >
+                  <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                  <span className="font-bold text-lg">New Meeting</span>
+                </button>
+
+                <button
+                  onClick={() => setShowJoinModal(true)}
+                  className="bg-blue-600 hover:bg-blue-500 text-white p-8 rounded-2xl flex flex-col items-center justify-center gap-4 shadow-xl transition"
+                >
+                  <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" /></svg>
+                  <span className="font-bold text-lg">Join</span>
+                </button>
+
+                <div className="bg-[#181c26] border border-slate-800 p-8 rounded-2xl flex flex-col items-center justify-center gap-4 opacity-70">
+                  <svg className="w-10 h-10 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                  <span className="font-bold text-lg text-slate-200">Schedule</span>
+                </div>
+
+                <div className="bg-[#181c26] border border-slate-800 p-8 rounded-2xl flex flex-col items-center justify-center gap-4 opacity-70">
+                  <svg className="w-10 h-10 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" /></svg>
+                  <span className="font-bold text-lg text-slate-200">Share Screen</span>
+                </div>
               </div>
-              <div>
-                <div className="font-semibold text-white">{currentUser?.name}</div>
-                <div className="text-xs text-slate-400">{currentUser?.email}</div>
+
+              {/* UPCOMING MEETINGS CONTAINER */}
+              <div className="bg-[#181c26] border border-slate-800/80 rounded-2xl p-6 mb-6">
+                <h3 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                  Upcoming Meetings
+                </h3>
+                <p className="text-xs text-slate-400 text-center py-6">No upcoming meetings scheduled.</p>
+              </div>
+
+              {/* RECENT MEETINGS CONTAINER */}
+              <div className="bg-[#181c26] border border-slate-800/80 rounded-2xl p-6">
+                <h3 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
+                  <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  Recent Meetings
+                </h3>
+                <p className="text-xs text-slate-400 text-center py-6">No recent meetings found.</p>
               </div>
             </div>
-            <button
-              onClick={handleLogout}
-              className="text-xs text-red-400 hover:text-red-300 transition"
-            >
-              Log Out
-            </button>
-          </div>
+          </main>
         </div>
       )}
 
@@ -336,7 +391,7 @@ export default function HomePage() {
             </h2>
             <p className="text-xs text-slate-400 mb-6">
               {authMode === 'login' 
-                ? 'Enter your credentials to access your meetings.' 
+                ? 'Enter your credentials to access your dashboard.' 
                 : 'Sign up to host instant meetings and schedule events.'}
             </p>
 
