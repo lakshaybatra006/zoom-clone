@@ -53,7 +53,7 @@ function RemoteVideoTile({ peer, reaction }: { peer: RemotePeer; reaction?: Acti
   }, [peer.stream]);
 
   return (
-    <div className="relative w-full h-full min-h-[280px] bg-[#12151b] border border-slate-800/80 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
+    <div className="relative w-full h-full min-h-[300px] bg-[#12151b] border border-slate-800/80 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
       <video
         ref={videoRef}
         autoPlay
@@ -64,7 +64,7 @@ function RemoteVideoTile({ peer, reaction }: { peer: RemotePeer; reaction?: Acti
         <span>{peer.name}</span>
       </div>
 
-      {/* REACTION ANIMATION OVERLAY */}
+      {/* REACTION OVERLAY */}
       {reaction && (
         <div className="absolute top-6 right-6 bg-black/70 backdrop-blur-md border border-white/20 px-4 py-2 rounded-2xl text-3xl animate-bounce shadow-2xl z-20">
           {reaction.emoji}
@@ -157,7 +157,7 @@ export default function RoomPage() {
     }
   }, []);
 
-  // Auto-scroll chat to bottom
+  // Auto-scroll chat
   useEffect(() => {
     if (activeSidebar === 'chat') {
       chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -236,7 +236,7 @@ export default function RoomPage() {
     };
   }, [myStatus]);
 
-  // 5. Real-Time Signaling (WebRTC + Chat + Emojis)
+  // 5. Real-Time WebRTC Peer Connection & Signaling Setup
   useEffect(() => {
     if (myStatus !== 'admitted' || !roomId || !userName) return;
 
@@ -259,7 +259,6 @@ export default function RoomPage() {
 
         if (sender === userName && type !== 'chat_self') return;
 
-        // Handle WebRTC Peer Connection Messages
         if (type === 'join') {
           createPeerConnection(sender, true);
         } else if (type === 'offer' && offer) {
@@ -283,9 +282,7 @@ export default function RoomPage() {
           if (pc) {
             await pc.addIceCandidate(new RTCIceCandidate(candidate));
           }
-        } 
-        // Handle Live In-Meeting Chat
-        else if (type === 'chat') {
+        } else if (type === 'chat') {
           const newMsg: ChatMessage = {
             id: 'msg-' + Date.now() + Math.random(),
             sender: sender,
@@ -297,9 +294,7 @@ export default function RoomPage() {
           if (activeSidebar !== 'chat') {
             setUnreadChatCount((prev) => prev + 1);
           }
-        } 
-        // Handle Emoji Reactions
-        else if (type === 'reaction') {
+        } else if (type === 'reaction') {
           const reactionId = 'react-' + Date.now();
           setActiveReactions((prev) => [...prev, { id: reactionId, sender, emoji }]);
           setTimeout(() => {
@@ -319,7 +314,6 @@ export default function RoomPage() {
       const pc = new RTCPeerConnection(ICE_SERVERS);
       peerConnections.current[peerName] = pc;
 
-      // Add local tracks (Camera or Screen Share) to peer connection
       const activeStream = screenStreamRef.current || localStreamRef.current;
       if (activeStream) {
         activeStream.getTracks().forEach((track) => {
@@ -370,7 +364,7 @@ export default function RoomPage() {
     };
   }, [myStatus, roomId, userName, myParticipantId, activeSidebar]);
 
-  // 6. Polling Room State for Waiting Room & Participant Sync
+  // 6. Polling Room State & Triggering WebRTC Connection for Admitted Users
   useEffect(() => {
     if (!hasSubmittedName || !roomId) return;
 
@@ -379,12 +373,13 @@ export default function RoomPage() {
         const res = await fetch(`${API_BASE}/api/meetings/${roomId}/state`);
         if (res.ok) {
           const data = await res.json();
-          setAdmittedParticipants(data.admitted || []);
+          const admittedList = data.admitted || [];
+          setAdmittedParticipants(admittedList);
           setWaitingParticipants(data.waiting || []);
           if (data.host_name) setHostName(data.host_name);
 
           if (myParticipantId) {
-            const meInAdmitted = (data.admitted || []).find((p: Participant) => p.id === myParticipantId || p.name === userName);
+            const meInAdmitted = admittedList.find((p: Participant) => p.id === myParticipantId || p.name === userName);
             if (meInAdmitted) {
               setMyStatus('admitted');
             }
@@ -401,7 +396,7 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [hasSubmittedName, roomId, myParticipantId, userName, isHost]);
 
-  // FEATURE 1: SCREEN SHARE TOGGLE
+  // Screen Share Toggle
   const toggleScreenShare = async () => {
     if (!isScreenSharing) {
       try {
@@ -410,15 +405,12 @@ export default function RoomPage() {
           audio: true,
         });
         screenStreamRef.current = screenStream;
-
         const screenVideoTrack = screenStream.getVideoTracks()[0];
 
-        // Replace track in local video view
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = screenStream;
         }
 
-        // Replace track in WebRTC Peer Connections for remote viewers
         Object.values(peerConnections.current).forEach((pc) => {
           const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
           if (sender) {
@@ -428,7 +420,6 @@ export default function RoomPage() {
 
         setIsScreenSharing(true);
 
-        // Revert to camera stream when user clicks browser native "Stop Sharing" button
         screenVideoTrack.onended = () => {
           stopScreenShare();
         };
@@ -446,12 +437,10 @@ export default function RoomPage() {
       screenStreamRef.current = null;
     }
 
-    // Revert local video view back to camera
     if (localStreamRef.current && localVideoRef.current) {
       localVideoRef.current.srcObject = localStreamRef.current;
       const cameraVideoTrack = localStreamRef.current.getVideoTracks()[0];
 
-      // Revert WebRTC sender tracks
       Object.values(peerConnections.current).forEach((pc) => {
         const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
         if (sender && cameraVideoTrack) {
@@ -463,7 +452,7 @@ export default function RoomPage() {
     setIsScreenSharing(false);
   };
 
-  // FEATURE 2: EMOJI REACTIONS
+  // Emoji Reactions
   const sendEmojiReaction = (emoji: string) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify({
@@ -482,7 +471,7 @@ export default function RoomPage() {
     setShowEmojiPicker(false);
   };
 
-  // FEATURE 3: LIVE IN-MEETING CHAT
+  // Chat
   const handleSendChatMessage = (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
@@ -498,7 +487,6 @@ export default function RoomPage() {
       }));
     }
 
-    // Append locally
     setChatMessages((prev) => [
       ...prev,
       {
@@ -695,7 +683,7 @@ export default function RoomPage() {
           ) : (
             <>
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 002-2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
               </svg>
               <span className="text-xs font-medium">Copy Link</span>
             </>
@@ -706,12 +694,12 @@ export default function RoomPage() {
       {/* MAIN VIDEO GRID & SIDEBAR PANELS */}
       <div className="flex-1 flex overflow-hidden relative">
         <main className="flex-1 flex items-center justify-center p-4">
-          <div className={`w-full max-w-5xl h-full grid gap-4 items-center justify-center ${
-            remotePeers.length > 0 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'
+          <div className={`w-full max-w-6xl h-full grid gap-4 items-center justify-center ${
+            admittedParticipants.length > 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'
           }`}>
             
-            {/* LOCAL USER TILE */}
-            <div className="relative w-full h-full min-h-[280px] bg-[#12151b] border border-slate-800/60 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
+            {/* LOCAL USER TILE (YOU) */}
+            <div className="relative w-full h-full min-h-[300px] bg-[#12151b] border border-slate-800/60 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
               {camOn || isScreenSharing ? (
                 <video
                   ref={localVideoRef}
@@ -739,7 +727,7 @@ export default function RoomPage() {
                 )}
               </div>
 
-              {/* LOCAL EMOJI REACTION ANIMATION */}
+              {/* LOCAL REACTION ANIMATION */}
               {activeReactions.filter((r) => r.sender === userName).length > 0 && (
                 <div className="absolute top-6 right-6 bg-black/70 backdrop-blur-md border border-white/20 px-4 py-2 rounded-2xl text-3xl animate-bounce shadow-2xl z-20">
                   {activeReactions.filter((r) => r.sender === userName).slice(-1)[0]?.emoji}
@@ -747,14 +735,46 @@ export default function RoomPage() {
               )}
             </div>
 
-            {/* REMOTE PARTICIPANT VIDEO TILES */}
-            {remotePeers.map((peer) => (
-              <RemoteVideoTile
-                key={peer.peerId}
-                peer={peer}
-                reaction={activeReactions.filter((r) => r.sender === peer.name).slice(-1)[0]}
-              />
-            ))}
+            {/* ADMITTED OTHER PARTICIPANTS TILES */}
+            {admittedParticipants
+              .filter((p) => p.name !== userName && p.id !== myParticipantId)
+              .map((p) => {
+                const peer = remotePeers.find((peer) => peer.name === p.name || peer.peerId === p.name);
+                const reaction = activeReactions.filter((r) => r.sender === p.name).slice(-1)[0];
+
+                if (peer && peer.stream) {
+                  return (
+                    <RemoteVideoTile
+                      key={p.id || p.name}
+                      peer={peer}
+                      reaction={reaction}
+                    />
+                  );
+                }
+
+                return (
+                  <div
+                    key={p.id || p.name}
+                    className="relative w-full h-full min-h-[300px] bg-[#12151b] border border-slate-800/80 rounded-2xl overflow-hidden shadow-2xl flex flex-col items-center justify-center gap-3"
+                  >
+                    <div className="w-20 h-20 rounded-full bg-blue-600 border border-blue-500/50 flex items-center justify-center text-2xl font-bold text-white shadow-lg animate-pulse">
+                      {p.name ? p.name.charAt(0).toUpperCase() : 'P'}
+                    </div>
+                    <span className="text-sm font-semibold text-slate-300">{p.name}</span>
+                    <span className="text-xs text-slate-500">Connecting video stream...</span>
+
+                    <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium text-slate-200 border border-white/10 flex items-center gap-2">
+                      <span>{p.name} {p.is_host ? '(Host)' : ''}</span>
+                    </div>
+
+                    {reaction && (
+                      <div className="absolute top-6 right-6 bg-black/70 backdrop-blur-md border border-white/20 px-4 py-2 rounded-2xl text-3xl animate-bounce shadow-2xl z-20">
+                        {reaction.emoji}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
 
           </div>
         </main>
@@ -842,7 +862,6 @@ export default function RoomPage() {
               </button>
             </div>
 
-            {/* CHAT MESSAGES DISPLAY */}
             <div className="flex-1 my-4 overflow-y-auto space-y-3 pr-1 max-h-[calc(100vh-220px)]">
               {chatMessages.length === 0 ? (
                 <div className="text-xs text-slate-500 text-center py-10">No messages yet. Send a chat to everyone!</div>
@@ -871,7 +890,6 @@ export default function RoomPage() {
               <div ref={chatBottomRef} />
             </div>
 
-            {/* CHAT INPUT FORM */}
             <form onSubmit={handleSendChatMessage} className="pt-2 border-t border-slate-800 flex items-center gap-2">
               <input
                 type="text"
@@ -893,15 +911,15 @@ export default function RoomPage() {
 
       {/* BOTTOM CONTROLS TOOLBAR */}
       <footer className="p-4 bg-[#12151b]/90 border-t border-slate-800/80 backdrop-blur-lg flex items-center justify-between z-10 relative">
-        <button
-          onClick={handleEndMeeting}
-          className="w-10 h-10 rounded-full bg-slate-800/80 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition"
-          title="Leave Room"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
-          </svg>
-        </button>
+        {/* BRANDING SPACER (REPLACES PREVIOUS EXIT ARROW) */}
+        <div className="hidden md:flex items-center gap-2">
+          <div className="bg-blue-600 text-white p-1 rounded">
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M4.5 4.5a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-3.586l3.293 3.293a1 1 0 001.414-1.414v-9.586a1 1 0 00-1.414-1.414L17.5 8.086V6.5a2 2 0 00-2-2h-11z" />
+            </svg>
+          </div>
+          <span className="text-xs font-bold tracking-tight text-slate-300">Zoom</span>
+        </div>
 
         {/* CENTER TOOLBAR BUTTONS */}
         <div className="flex items-center gap-3 md:gap-4 relative">
@@ -932,7 +950,7 @@ export default function RoomPage() {
             </svg>
           </button>
 
-          {/* SCREEN SHARE BUTTON */}
+          {/* Screen Share Button */}
           <button
             onClick={toggleScreenShare}
             className={`w-12 h-12 rounded-full flex items-center justify-center transition shadow-lg ${
@@ -945,7 +963,7 @@ export default function RoomPage() {
             </svg>
           </button>
 
-          {/* REACTION / EMOJI PICKER BUTTON */}
+          {/* Emoji Reactions Picker */}
           <div className="relative">
             <button
               onClick={() => setShowEmojiPicker(!showEmojiPicker)}
@@ -979,9 +997,9 @@ export default function RoomPage() {
           </button>
         </div>
 
-        {/* RIGHT SIDEBAR TOGGLES (CHAT & PARTICIPANTS) */}
+        {/* RIGHT SIDEBAR TOGGLES */}
         <div className="flex items-center gap-2">
-          {/* CHAT TOGGLE BUTTON */}
+          {/* Chat Toggle */}
           <button
             onClick={() => {
               setActiveSidebar(activeSidebar === 'chat' ? 'none' : 'chat');
@@ -1002,7 +1020,7 @@ export default function RoomPage() {
             )}
           </button>
 
-          {/* PARTICIPANTS TOGGLE BUTTON */}
+          {/* Participants Toggle */}
           <button
             onClick={() => setActiveSidebar(activeSidebar === 'participants' ? 'none' : 'participants')}
             className={`relative w-10 h-10 rounded-full flex items-center justify-center transition ${
