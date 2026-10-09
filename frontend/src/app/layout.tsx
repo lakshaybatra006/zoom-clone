@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { StreamVideoProvider } from '@/providers/StreamVideoProvider';
+import { StreamVideoProvider } from '../providers/StreamVideoProvider';
 import '@stream-io/video-react-sdk/dist/css/styles.css';
 import './globals.css';
 
