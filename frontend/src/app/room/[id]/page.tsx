@@ -9,7 +9,7 @@ export default function HomePage() {
   const router = useRouter();
 
   const [currentUser, setCurrentUser] = useState<any>(null);
-  // Default ALWAYS to landing page on initial load
+  // ALWAYS default to 'landing' so Vercel loads the Zoom marketing page first
   const [viewMode, setViewMode] = useState<'landing' | 'dashboard'>('landing');
 
   // Auth Modal States
@@ -24,7 +24,7 @@ export default function HomePage() {
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [joinRoomId, setJoinRoomId] = useState('');
 
-  // Load saved session info without automatically redirecting away from landing page
+  // Load saved session info without auto-redirecting away from landing page
   useEffect(() => {
     const savedUser = localStorage.getItem('zoom_clone_user');
     if (savedUser) {
@@ -32,7 +32,7 @@ export default function HomePage() {
         const parsed = JSON.parse(savedUser);
         if (parsed) {
           setCurrentUser(parsed);
-          // Keep viewMode as 'landing' so Vercel always loads the landing page first!
+          // viewMode stays 'landing' so the site always opens on the landing page
         }
       } catch (e) {
         console.error("Failed to parse saved user", e);
@@ -66,7 +66,7 @@ export default function HomePage() {
       setCurrentUser(data);
       localStorage.setItem('zoom_clone_user', JSON.stringify(data));
       setShowAuthModal(false);
-      setViewMode('dashboard'); // Go to dashboard AFTER successful login/signup
+      setViewMode('dashboard'); // Transition to dashboard after logging in
       setAuthEmail('');
       setAuthPassword('');
       setAuthName('');
@@ -116,12 +116,12 @@ export default function HomePage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#07090e] text-white flex flex-col font-sans">
+    <div className="min-h-screen bg-[#07090e] text-white flex flex-col font-sans selection:bg-blue-600 selection:text-white">
       
       {/* 1. MARKETING LANDING PAGE VIEW */}
       {viewMode === 'landing' && (
         <div className="min-h-screen flex flex-col">
-          {/* HEADER */}
+          {/* NAVBAR */}
           <nav className="border-b border-slate-800/80 bg-[#07090e]/90 backdrop-blur-md sticky top-0 z-40 px-6 py-4 flex items-center justify-between">
             <div className="flex items-center gap-8">
               <div className="flex items-center gap-2 select-none">
@@ -176,7 +176,7 @@ export default function HomePage() {
             </div>
           </nav>
 
-          {/* ANNOUNCEMENT BANNER */}
+          {/* BANNER */}
           <div className="bg-gradient-to-r from-blue-950 via-indigo-900 to-blue-950 border-b border-blue-800/40 py-2.5 px-4 text-center text-xs md:text-sm text-blue-200 flex items-center justify-center gap-2">
             <span>AI, CX, and beyond — Zoomtopia 2026 sessions are live!</span>
             <button 
@@ -256,13 +256,12 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* 2. DASHBOARD VIEW (SHOWN AFTER SIGN IN) */}
+      {/* 2. DASHBOARD VIEW (AFTER SIGN IN) */}
       {viewMode === 'dashboard' && (
         <div className="flex h-screen bg-[#11141b] text-white overflow-hidden">
           {/* SIDEBAR */}
           <aside className="w-64 bg-[#181c26] border-r border-slate-800 flex flex-col justify-between p-4">
             <div>
-              {/* BRANDING */}
               <div 
                 onClick={() => setViewMode('landing')}
                 className="flex items-center gap-2 px-3 py-2 cursor-pointer mb-6"
@@ -275,7 +274,6 @@ export default function HomePage() {
                 <span className="text-xl font-bold tracking-tight">zoom</span>
               </div>
 
-              {/* NAV MENU */}
               <nav className="space-y-1">
                 <button className="w-full flex items-center gap-3 px-4 py-2.5 bg-slate-800 text-white rounded-xl font-medium text-sm">
                   <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
@@ -292,7 +290,6 @@ export default function HomePage() {
               </nav>
             </div>
 
-            {/* LOGGED IN USER FOOTER */}
             <div className="pt-4 border-t border-slate-800">
               <div className="flex items-center gap-3 mb-3">
                 <div className="w-9 h-9 rounded-full bg-blue-600 font-bold flex items-center justify-center text-white text-sm">
@@ -321,10 +318,9 @@ export default function HomePage() {
             </div>
           </aside>
 
-          {/* MAIN DASHBOARD CONTENT */}
+          {/* DASHBOARD CONTENT */}
           <main className="flex-1 p-8 overflow-y-auto">
             <div className="max-w-5xl mx-auto">
-              {/* ACTION GRID */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 <button
                   onClick={handleStartInstantMeeting}
@@ -353,7 +349,6 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* UPCOMING MEETINGS CONTAINER */}
               <div className="bg-[#181c26] border border-slate-800/80 rounded-2xl p-6 mb-6">
                 <h3 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
                   <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
@@ -362,7 +357,6 @@ export default function HomePage() {
                 <p className="text-xs text-slate-400 text-center py-6">No upcoming meetings scheduled.</p>
               </div>
 
-              {/* RECENT MEETINGS CONTAINER */}
               <div className="bg-[#181c26] border border-slate-800/80 rounded-2xl p-6">
                 <h3 className="text-base font-semibold text-white mb-4 flex items-center gap-2">
                   <svg className="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
@@ -375,7 +369,7 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* AUTH MODAL (SIGN IN / SIGN UP) */}
+      {/* AUTH MODAL */}
       {showAuthModal && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-[#121620] border border-slate-800 p-8 rounded-2xl max-w-md w-full relative shadow-2xl">
