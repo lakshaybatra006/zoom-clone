@@ -5,7 +5,6 @@ import { useParams, useSearchParams, useRouter } from 'next/navigation';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://zoom-clone-4-zp2h.onrender.com";
 
-// Public STUN Servers for NAT Traversal (Mobile 5G <-> Desktop Wi-Fi)
 const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -26,14 +25,27 @@ interface RemotePeer {
   stream: MediaStream;
 }
 
-// Component to render Remote Participant Video & Audio Stream
-function RemoteVideoTile({ peer }: { peer: RemotePeer }) {
+interface ChatMessage {
+  id: string;
+  sender: string;
+  text: string;
+  time: string;
+  isSelf: boolean;
+}
+
+interface ActiveReaction {
+  id: string;
+  sender: string;
+  emoji: string;
+}
+
+// Remote Participant Video Tile Component
+function RemoteVideoTile({ peer, reaction }: { peer: RemotePeer; reaction?: ActiveReaction }) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     if (videoRef.current && peer.stream) {
       videoRef.current.srcObject = peer.stream;
-      // Ensure audio plays unmuted on remote participant tile
       videoRef.current.play().catch((err) => {
         console.warn('Autoplay audio interaction needed:', err);
       });
@@ -41,7 +53,7 @@ function RemoteVideoTile({ peer }: { peer: RemotePeer }) {
   }, [peer.stream]);
 
   return (
-    <div className="relative w-full h-full bg-[#12151b] border border-slate-800/80 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
+    <div className="relative w-full h-full min-h-[280px] bg-[#12151b] border border-slate-800/80 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
       <video
         ref={videoRef}
         autoPlay
@@ -51,6 +63,13 @@ function RemoteVideoTile({ peer }: { peer: RemotePeer }) {
       <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium text-slate-200 border border-white/10 flex items-center gap-2">
         <span>{peer.name}</span>
       </div>
+
+      {/* REACTION ANIMATION OVERLAY */}
+      {reaction && (
+        <div className="absolute top-6 right-6 bg-black/70 backdrop-blur-md border border-white/20 px-4 py-2 rounded-2xl text-3xl animate-bounce shadow-2xl z-20">
+          {reaction.emoji}
+        </div>
+      )}
     </div>
   );
 }
@@ -60,7 +79,7 @@ export default function RoomPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  // State for Room & User
+  // Room & User State
   const [roomId, setRoomId] = useState<string>('');
   const [userName, setUserName] = useState<string>('');
   const [hasSubmittedName, setHasSubmittedName] = useState<boolean>(false);
@@ -71,21 +90,35 @@ export default function RoomPage() {
   const [myParticipantId, setMyParticipantId] = useState<string>('');
   const [hostName, setHostName] = useState<string>('');
 
-  // UI & Control States
+  // Control States
   const [micOn, setMicOn] = useState<boolean>(true);
   const [camOn, setCamOn] = useState<boolean>(true);
+  const [isScreenSharing, setIsScreenSharing] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
-  const [showParticipants, setShowParticipants] = useState<boolean>(false);
 
-  // Participants Lists & WebRTC Remote Streams
+  // Sidebar Panel State: 'none' | 'participants' | 'chat'
+  const [activeSidebar, setActiveSidebar] = useState<'none' | 'participants' | 'chat'>('none');
+
+  // Emojis / Reactions State
+  const [showEmojiPicker, setShowEmojiPicker] = useState<boolean>(false);
+  const [activeReactions, setActiveReactions] = useState<ActiveReaction[]>([]);
+
+  // Chat State
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState<string>('');
+  const [unreadChatCount, setUnreadChatCount] = useState<number>(0);
+
+  // Participants & WebRTC Remote Peers State
   const [admittedParticipants, setAdmittedParticipants] = useState<Participant[]>([]);
   const [waitingParticipants, setWaitingParticipants] = useState<Participant[]>([]);
   const [remotePeers, setRemotePeers] = useState<RemotePeer[]>([]);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const screenStreamRef = useRef<MediaStream | null>(null);
   const peerConnections = useRef<{ [key: string]: RTCPeerConnection }>({});
   const socketRef = useRef<WebSocket | null>(null);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
 
   // 1. Resolve Room ID & Host Flag
   useEffect(() => {
@@ -123,6 +156,14 @@ export default function RoomPage() {
       }
     }
   }, []);
+
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    if (activeSidebar === 'chat') {
+      chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+      setUnreadChatCount(0);
+    }
+  }, [chatMessages, activeSidebar]);
 
   // 3. Register user with room backend
   useEffect(() => {
@@ -163,7 +204,7 @@ export default function RoomPage() {
     registerParticipant();
   }, [hasSubmittedName, roomId, userName]);
 
-  // 4. Initialize Local Camera & Microphone Stream when Admitted
+  // 4. Initialize Local Camera & Microphone Stream
   useEffect(() => {
     if (myStatus !== 'admitted') return;
 
@@ -195,7 +236,7 @@ export default function RoomPage() {
     };
   }, [myStatus]);
 
-  // 5. Real-Time WebRTC Peer Connection & Signaling Setup
+  // 5. Real-Time Signaling (WebRTC + Chat + Emojis)
   useEffect(() => {
     if (myStatus !== 'admitted' || !roomId || !userName) return;
 
@@ -214,15 +255,14 @@ export default function RoomPage() {
     socket.onmessage = async (event) => {
       try {
         const msg = JSON.parse(event.data);
-        const { type, sender, offer, answer, candidate } = msg;
+        const { type, sender, offer, answer, candidate, text, time, emoji } = msg;
 
-        if (sender === userName) return; // Ignore own messages
+        if (sender === userName && type !== 'chat_self') return;
 
+        // Handle WebRTC Peer Connection Messages
         if (type === 'join') {
-          // Initiate WebRTC offer to new peer
           createPeerConnection(sender, true);
         } else if (type === 'offer' && offer) {
-          // Receive WebRTC offer and reply with answer
           const pc = createPeerConnection(sender, false);
           await pc.setRemoteDescription(new RTCSessionDescription(offer));
           const ans = await pc.createAnswer();
@@ -243,9 +283,31 @@ export default function RoomPage() {
           if (pc) {
             await pc.addIceCandidate(new RTCIceCandidate(candidate));
           }
+        } 
+        // Handle Live In-Meeting Chat
+        else if (type === 'chat') {
+          const newMsg: ChatMessage = {
+            id: 'msg-' + Date.now() + Math.random(),
+            sender: sender,
+            text: text,
+            time: time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            isSelf: sender === userName,
+          };
+          setChatMessages((prev) => [...prev, newMsg]);
+          if (activeSidebar !== 'chat') {
+            setUnreadChatCount((prev) => prev + 1);
+          }
+        } 
+        // Handle Emoji Reactions
+        else if (type === 'reaction') {
+          const reactionId = 'react-' + Date.now();
+          setActiveReactions((prev) => [...prev, { id: reactionId, sender, emoji }]);
+          setTimeout(() => {
+            setActiveReactions((prev) => prev.filter((r) => r.id !== reactionId));
+          }, 3500);
         }
       } catch (e) {
-        console.error('WebRTC Signaling Error:', e);
+        console.error('Signaling Error:', e);
       }
     };
 
@@ -257,14 +319,14 @@ export default function RoomPage() {
       const pc = new RTCPeerConnection(ICE_SERVERS);
       peerConnections.current[peerName] = pc;
 
-      // Add local audio and video tracks to WebRTC peer connection
-      if (localStreamRef.current) {
-        localStreamRef.current.getTracks().forEach((track) => {
-          pc.addTrack(track, localStreamRef.current!);
+      // Add local tracks (Camera or Screen Share) to peer connection
+      const activeStream = screenStreamRef.current || localStreamRef.current;
+      if (activeStream) {
+        activeStream.getTracks().forEach((track) => {
+          pc.addTrack(track, activeStream);
         });
       }
 
-      // Receive remote stream (Audio & Video)
       pc.ontrack = (evt) => {
         const remoteStream = evt.streams[0];
         setRemotePeers((prev) => {
@@ -273,7 +335,6 @@ export default function RoomPage() {
         });
       };
 
-      // Send ICE candidates over WebSocket
       pc.onicecandidate = (evt) => {
         if (evt.candidate && socketRef.current?.readyState === WebSocket.OPEN) {
           socketRef.current.send(JSON.stringify({
@@ -307,9 +368,9 @@ export default function RoomPage() {
       Object.values(peerConnections.current).forEach((pc) => pc.close());
       peerConnections.current = {};
     };
-  }, [myStatus, roomId, userName, myParticipantId]);
+  }, [myStatus, roomId, userName, myParticipantId, activeSidebar]);
 
-  // 6. Polling Room State for Participants & Waiting Room
+  // 6. Polling Room State for Waiting Room & Participant Sync
   useEffect(() => {
     if (!hasSubmittedName || !roomId) return;
 
@@ -340,6 +401,118 @@ export default function RoomPage() {
     return () => clearInterval(interval);
   }, [hasSubmittedName, roomId, myParticipantId, userName, isHost]);
 
+  // FEATURE 1: SCREEN SHARE TOGGLE
+  const toggleScreenShare = async () => {
+    if (!isScreenSharing) {
+      try {
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true,
+        });
+        screenStreamRef.current = screenStream;
+
+        const screenVideoTrack = screenStream.getVideoTracks()[0];
+
+        // Replace track in local video view
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = screenStream;
+        }
+
+        // Replace track in WebRTC Peer Connections for remote viewers
+        Object.values(peerConnections.current).forEach((pc) => {
+          const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+          if (sender) {
+            sender.replaceTrack(screenVideoTrack);
+          }
+        });
+
+        setIsScreenSharing(true);
+
+        // Revert to camera stream when user clicks browser native "Stop Sharing" button
+        screenVideoTrack.onended = () => {
+          stopScreenShare();
+        };
+      } catch (err) {
+        console.error('Error starting screen share:', err);
+      }
+    } else {
+      stopScreenShare();
+    }
+  };
+
+  const stopScreenShare = () => {
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((track) => track.stop());
+      screenStreamRef.current = null;
+    }
+
+    // Revert local video view back to camera
+    if (localStreamRef.current && localVideoRef.current) {
+      localVideoRef.current.srcObject = localStreamRef.current;
+      const cameraVideoTrack = localStreamRef.current.getVideoTracks()[0];
+
+      // Revert WebRTC sender tracks
+      Object.values(peerConnections.current).forEach((pc) => {
+        const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+        if (sender && cameraVideoTrack) {
+          sender.replaceTrack(cameraVideoTrack);
+        }
+      });
+    }
+
+    setIsScreenSharing(false);
+  };
+
+  // FEATURE 2: EMOJI REACTIONS
+  const sendEmojiReaction = (emoji: string) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({
+        type: 'reaction',
+        sender: userName,
+        emoji: emoji,
+      }));
+    }
+
+    const reactionId = 'react-' + Date.now();
+    setActiveReactions((prev) => [...prev, { id: reactionId, sender: userName, emoji }]);
+    setTimeout(() => {
+      setActiveReactions((prev) => prev.filter((r) => r.id !== reactionId));
+    }, 3500);
+
+    setShowEmojiPicker(false);
+  };
+
+  // FEATURE 3: LIVE IN-MEETING CHAT
+  const handleSendChatMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({
+        type: 'chat',
+        sender: userName,
+        text: chatInput.trim(),
+        time: timeStr,
+      }));
+    }
+
+    // Append locally
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        id: 'msg-' + Date.now(),
+        sender: userName,
+        text: chatInput.trim(),
+        time: timeStr,
+        isSelf: true,
+      },
+    ]);
+
+    setChatInput('');
+  };
+
   // Host Action: Admit Participant
   const handleAdmit = async (participantId: string) => {
     try {
@@ -368,7 +541,7 @@ export default function RoomPage() {
     }
   };
 
-  // Toggle Microphone
+  // Controls
   const toggleMic = () => {
     if (localStreamRef.current) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
@@ -379,7 +552,6 @@ export default function RoomPage() {
     }
   };
 
-  // Toggle Camera
   const toggleCam = () => {
     if (localStreamRef.current) {
       const videoTrack = localStreamRef.current.getVideoTracks()[0];
@@ -390,7 +562,6 @@ export default function RoomPage() {
     }
   };
 
-  // Copy Meeting Link
   const copyMeetingLink = () => {
     if (!roomId) return;
     const link = `${window.location.origin}/room/${roomId}`;
@@ -399,10 +570,12 @@ export default function RoomPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // End Meeting & Return Home
   const handleEndMeeting = () => {
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
+    }
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((track) => track.stop());
     }
     router.push('/');
   };
@@ -417,7 +590,7 @@ export default function RoomPage() {
   return (
     <div className="relative min-h-screen bg-[#0d0f12] text-white flex flex-col justify-between select-none overflow-hidden font-sans">
       
-      {/* 1. GUEST NAME MODAL */}
+      {/* 1. GUEST DISPLAY NAME MODAL */}
       {!hasSubmittedName && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-[#16191e] border border-slate-800 p-6 rounded-2xl max-w-md w-full shadow-2xl">
@@ -530,22 +703,22 @@ export default function RoomPage() {
         </button>
       </header>
 
-      {/* MAIN VIDEO GRID & PARTICIPANTS PANEL */}
+      {/* MAIN VIDEO GRID & SIDEBAR PANELS */}
       <div className="flex-1 flex overflow-hidden relative">
         <main className="flex-1 flex items-center justify-center p-4">
           <div className={`w-full max-w-5xl h-full grid gap-4 items-center justify-center ${
             remotePeers.length > 0 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'
           }`}>
             
-            {/* LOCAL USER TILE (MUST BE MUTED TO AVOID ECHO) */}
-            <div className="relative w-full h-full min-h-[300px] bg-[#12151b] border border-slate-800/60 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
-              {camOn ? (
+            {/* LOCAL USER TILE */}
+            <div className="relative w-full h-full min-h-[280px] bg-[#12151b] border border-slate-800/60 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
+              {camOn || isScreenSharing ? (
                 <video
                   ref={localVideoRef}
                   autoPlay
                   playsInline
                   muted
-                  className="w-full h-full object-cover -scale-x-100"
+                  className={`w-full h-full object-cover ${isScreenSharing ? '' : '-scale-x-100'}`}
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center gap-3">
@@ -557,7 +730,7 @@ export default function RoomPage() {
               )}
 
               <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium text-slate-200 border border-white/10 flex items-center gap-2">
-                <span>{userName || 'Guest'} {isHost ? '(Host, You)' : '(You)'}</span>
+                <span>{userName || 'Guest'} {isHost ? '(Host, You)' : '(You)'} {isScreenSharing ? '[Screen]' : ''}</span>
                 {!micOn && (
                   <svg className="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
@@ -565,18 +738,29 @@ export default function RoomPage() {
                   </svg>
                 )}
               </div>
+
+              {/* LOCAL EMOJI REACTION ANIMATION */}
+              {activeReactions.filter((r) => r.sender === userName).length > 0 && (
+                <div className="absolute top-6 right-6 bg-black/70 backdrop-blur-md border border-white/20 px-4 py-2 rounded-2xl text-3xl animate-bounce shadow-2xl z-20">
+                  {activeReactions.filter((r) => r.sender === userName).slice(-1)[0]?.emoji}
+                </div>
+              )}
             </div>
 
-            {/* REMOTE PARTICIPANT VIDEO TILES (LIVE AUDIO & VIDEO) */}
+            {/* REMOTE PARTICIPANT VIDEO TILES */}
             {remotePeers.map((peer) => (
-              <RemoteVideoTile key={peer.peerId} peer={peer} />
+              <RemoteVideoTile
+                key={peer.peerId}
+                peer={peer}
+                reaction={activeReactions.filter((r) => r.sender === peer.name).slice(-1)[0]}
+              />
             ))}
 
           </div>
         </main>
 
-        {/* PARTICIPANTS SIDEBAR */}
-        {showParticipants && (
+        {/* SIDEBAR PANEL 1: PARTICIPANTS */}
+        {activeSidebar === 'participants' && (
           <aside className="w-80 bg-[#16191e] border-l border-slate-800/80 p-4 flex flex-col justify-between z-30">
             <div>
               <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-800">
@@ -586,7 +770,7 @@ export default function RoomPage() {
                     {admittedParticipants.length}
                   </span>
                 </h3>
-                <button onClick={() => setShowParticipants(false)} className="text-slate-400 hover:text-white p-1">
+                <button onClick={() => setActiveSidebar('none')} className="text-slate-400 hover:text-white p-1">
                   ✕
                 </button>
               </div>
@@ -643,49 +827,150 @@ export default function RoomPage() {
               onClick={copyMeetingLink}
               className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium transition flex items-center justify-center gap-2 mt-4"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
-              </svg>
               <span>Invite Participants</span>
             </button>
           </aside>
         )}
+
+        {/* SIDEBAR PANEL 2: LIVE IN-MEETING CHAT */}
+        {activeSidebar === 'chat' && (
+          <aside className="w-80 bg-[#16191e] border-l border-slate-800/80 p-4 flex flex-col justify-between z-30">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <h3 className="font-bold text-sm text-white">In-Meeting Chat</h3>
+              <button onClick={() => setActiveSidebar('none')} className="text-slate-400 hover:text-white p-1">
+                ✕
+              </button>
+            </div>
+
+            {/* CHAT MESSAGES DISPLAY */}
+            <div className="flex-1 my-4 overflow-y-auto space-y-3 pr-1 max-h-[calc(100vh-220px)]">
+              {chatMessages.length === 0 ? (
+                <div className="text-xs text-slate-500 text-center py-10">No messages yet. Send a chat to everyone!</div>
+              ) : (
+                chatMessages.map((msg) => (
+                  <div
+                    key={msg.id}
+                    className={`flex flex-col ${msg.isSelf ? 'items-end' : 'items-start'}`}
+                  >
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className="text-[11px] font-semibold text-slate-300">{msg.sender}</span>
+                      <span className="text-[9px] text-slate-500">{msg.time}</span>
+                    </div>
+                    <div
+                      className={`p-3 rounded-2xl text-xs max-w-[85%] leading-relaxed ${
+                        msg.isSelf
+                          ? 'bg-blue-600 text-white rounded-tr-none'
+                          : 'bg-[#0d0f12] text-slate-200 border border-slate-800 rounded-tl-none'
+                      }`}
+                    >
+                      {msg.text}
+                    </div>
+                  </div>
+                ))
+              )}
+              <div ref={chatBottomRef} />
+            </div>
+
+            {/* CHAT INPUT FORM */}
+            <form onSubmit={handleSendChatMessage} className="pt-2 border-t border-slate-800 flex items-center gap-2">
+              <input
+                type="text"
+                placeholder="Type message..."
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                className="flex-1 px-3 py-2 bg-[#0d0f12] border border-slate-700 rounded-xl text-xs text-white focus:outline-none focus:border-blue-500"
+              />
+              <button
+                type="submit"
+                className="px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold rounded-xl transition"
+              >
+                Send
+              </button>
+            </form>
+          </aside>
+        )}
       </div>
 
-      {/* BOTTOM CONTROLS BAR */}
-      <footer className="p-4 bg-[#12151b]/90 border-t border-slate-800/80 backdrop-blur-lg flex items-center justify-between z-10">
+      {/* BOTTOM CONTROLS TOOLBAR */}
+      <footer className="p-4 bg-[#12151b]/90 border-t border-slate-800/80 backdrop-blur-lg flex items-center justify-between z-10 relative">
         <button
           onClick={handleEndMeeting}
           className="w-10 h-10 rounded-full bg-slate-800/80 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition"
+          title="Leave Room"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" />
           </svg>
         </button>
 
-        <div className="flex items-center gap-4">
+        {/* CENTER TOOLBAR BUTTONS */}
+        <div className="flex items-center gap-3 md:gap-4 relative">
+          
+          {/* Microphone Toggle */}
           <button
             onClick={toggleMic}
             className={`w-12 h-12 rounded-full flex items-center justify-center transition shadow-lg ${
               micOn ? 'bg-slate-800 hover:bg-slate-700 text-white' : 'bg-red-500/20 text-red-500 border border-red-500/30'
             }`}
+            title={micOn ? 'Mute Mic' : 'Unmute Mic'}
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
             </svg>
           </button>
 
+          {/* Camera Toggle */}
           <button
             onClick={toggleCam}
             className={`w-12 h-12 rounded-full flex items-center justify-center transition shadow-lg ${
               camOn ? 'bg-slate-800 hover:bg-slate-700 text-white' : 'bg-red-500/20 text-red-500 border border-red-500/30'
             }`}
+            title={camOn ? 'Turn Off Camera' : 'Turn On Camera'}
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
             </svg>
           </button>
 
+          {/* SCREEN SHARE BUTTON */}
+          <button
+            onClick={toggleScreenShare}
+            className={`w-12 h-12 rounded-full flex items-center justify-center transition shadow-lg ${
+              isScreenSharing ? 'bg-emerald-600 text-white border-2 border-emerald-400' : 'bg-slate-800 hover:bg-slate-700 text-white'
+            }`}
+            title={isScreenSharing ? 'Stop Screen Share' : 'Share Screen'}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+          </button>
+
+          {/* REACTION / EMOJI PICKER BUTTON */}
+          <div className="relative">
+            <button
+              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+              className="w-12 h-12 rounded-full bg-slate-800 hover:bg-slate-700 text-white flex items-center justify-center transition shadow-lg text-lg"
+              title="Reactions"
+            >
+              😊
+            </button>
+
+            {showEmojiPicker && (
+              <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-[#16191e] border border-slate-700 p-2 rounded-2xl shadow-2xl flex items-center gap-2 z-50 animate-in fade-in zoom-in duration-150">
+                {['👍', '❤️', '👏', '😂', '🎉', '🔥', '👋', '😮'].map((emoji) => (
+                  <button
+                    key={emoji}
+                    onClick={() => sendEmojiReaction(emoji)}
+                    className="p-2 hover:bg-slate-800 rounded-xl text-xl transition transform hover:scale-125"
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* End Meeting Button */}
           <button
             onClick={handleEndMeeting}
             className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-full flex items-center gap-2 transition shadow-lg shadow-red-600/30"
@@ -694,21 +979,47 @@ export default function RoomPage() {
           </button>
         </div>
 
-        <button
-          onClick={() => setShowParticipants(!showParticipants)}
-          className={`relative w-10 h-10 rounded-full flex items-center justify-center transition ${
-            showParticipants ? 'bg-blue-600 text-white' : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
-          }`}
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
-          </svg>
-          {waitingParticipants.length > 0 && (
-            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center animate-pulse">
-              {waitingParticipants.length}
-            </span>
-          )}
-        </button>
+        {/* RIGHT SIDEBAR TOGGLES (CHAT & PARTICIPANTS) */}
+        <div className="flex items-center gap-2">
+          {/* CHAT TOGGLE BUTTON */}
+          <button
+            onClick={() => {
+              setActiveSidebar(activeSidebar === 'chat' ? 'none' : 'chat');
+              setUnreadChatCount(0);
+            }}
+            className={`relative w-10 h-10 rounded-full flex items-center justify-center transition ${
+              activeSidebar === 'chat' ? 'bg-blue-600 text-white' : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
+            }`}
+            title="Chat"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+            {unreadChatCount > 0 && (
+              <span className="absolute -top-1 -right-1 bg-blue-500 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center shadow animate-pulse">
+                {unreadChatCount}
+              </span>
+            )}
+          </button>
+
+          {/* PARTICIPANTS TOGGLE BUTTON */}
+          <button
+            onClick={() => setActiveSidebar(activeSidebar === 'participants' ? 'none' : 'participants')}
+            className={`relative w-10 h-10 rounded-full flex items-center justify-center transition ${
+              activeSidebar === 'participants' ? 'bg-blue-600 text-white' : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
+            }`}
+            title="Participants"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>
+            {waitingParticipants.length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center animate-pulse">
+                {waitingParticipants.length}
+              </span>
+            )}
+          </button>
+        </div>
       </footer>
     </div>
   );
