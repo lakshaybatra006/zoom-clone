@@ -3,31 +3,43 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useSearchParams, useRouter } from 'next/navigation';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://zoom-clone-4-zp2h.onrender.com";
+
+interface Participant {
+  id: string;
+  name: string;
+  isSelf?: boolean;
+}
+
 export default function RoomPage() {
   const params = useParams();
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  // State for room ID to handle hydration and prevent 'undefined' string
+  // State for room ID & user session
   const [roomId, setRoomId] = useState<string>('');
   const [userName, setUserName] = useState<string>('');
   const [hasJoined, setHasJoined] = useState<boolean>(false);
 
+  // UI & Control States
   const [micOn, setMicOn] = useState<boolean>(true);
   const [camOn, setCamOn] = useState<boolean>(true);
   const [copied, setCopied] = useState<boolean>(false);
+  const [showParticipants, setShowParticipants] = useState<boolean>(false);
+
+  // Participants List State
+  const [participants, setParticipants] = useState<Participant[]>([]);
 
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // 1. Resolve and validate Room ID dynamically
+  // 1. Resolve and validate Room ID
   useEffect(() => {
     const rawId = (params?.id || params?.roomId || searchParams?.get('id')) as string;
 
     if (rawId && rawId !== 'undefined' && rawId !== 'null') {
       setRoomId(rawId);
     } else {
-      // Fallback 6-character room code if ID is missing or literally 'undefined'
       const fallback = Math.random().toString(36).substring(2, 8);
       setRoomId(fallback);
       if (typeof window !== 'undefined') {
@@ -36,7 +48,7 @@ export default function RoomPage() {
     }
   }, [params, searchParams]);
 
-  // 2. Check for logged-in user session on mount
+  // 2. Check for logged-in user on mount
   useEffect(() => {
     const savedUser = localStorage.getItem('zoom_clone_user');
     if (savedUser) {
@@ -52,7 +64,7 @@ export default function RoomPage() {
     }
   }, []);
 
-  // 3. Initialize Camera & Mic MediaStream when user enters the room
+  // 3. Initialize Camera & Mic MediaStream
   useEffect(() => {
     if (!hasJoined) return;
 
@@ -79,6 +91,67 @@ export default function RoomPage() {
       }
     };
   }, [hasJoined]);
+
+  // 4. Real-time Multi-Device WebSocket Sync for Participants
+  useEffect(() => {
+    if (!hasJoined || !roomId || !userName) return;
+
+    // Set local participant state initially
+    const selfUser = { id: 'self-' + Date.now(), name: userName, isSelf: true };
+    setParticipants([selfUser]);
+
+    let socket: WebSocket | null = null;
+
+    try {
+      // Connect to WebSocket server on Render backend
+      const wsUrl = `${API_BASE.replace(/^http/, 'ws')}/ws/${roomId}`;
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        socket?.send(JSON.stringify({
+          type: 'join',
+          name: userName,
+          roomId: roomId,
+        }));
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type === 'participants_list' || Array.isArray(data.participants)) {
+            const list = data.participants.map((p: any) => ({
+              id: p.id || p.name,
+              name: p.name,
+              isSelf: p.name === userName,
+            }));
+            setParticipants(list);
+          } else if (data.type === 'user_joined' && data.name) {
+            setParticipants((prev) => {
+              if (prev.some((p) => p.name === data.name)) return prev;
+              return [...prev, { id: data.id || data.name, name: data.name, isSelf: data.name === userName }];
+            });
+          } else if (data.type === 'user_left' && data.name) {
+            setParticipants((prev) => prev.filter((p) => p.name !== data.name));
+          }
+        } catch (e) {
+          console.error('Error parsing WebSocket message:', e);
+        }
+      };
+
+      socket.onerror = (err) => {
+        console.warn('WebSocket connection notice (fallback active):', err);
+      };
+    } catch (e) {
+      console.warn('WebSocket connection not initialized, using local session state.');
+    }
+
+    return () => {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
+    };
+  }, [hasJoined, roomId, userName]);
 
   // Toggle Microphone
   const toggleMic = () => {
@@ -128,7 +201,8 @@ export default function RoomPage() {
   };
 
   return (
-    <div className="relative min-h-screen bg-[#0d0f12] text-white flex flex-col justify-between select-none">
+    <div className="relative min-h-screen bg-[#0d0f12] text-white flex flex-col justify-between select-none overflow-hidden font-sans">
+      
       {/* GUEST DISPLAY NAME MODAL */}
       {!hasJoined && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -191,38 +265,99 @@ export default function RoomPage() {
         </button>
       </header>
 
-      {/* MAIN VIDEO AREA */}
-      <main className="flex-1 flex items-center justify-center p-4">
-        <div className="relative w-full max-w-4xl aspect-video bg-[#12151b] border border-slate-800/60 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
-          {camOn ? (
-            <video
-              ref={localVideoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-cover -scale-x-100"
-            />
-          ) : (
-            <div className="flex flex-col items-center justify-center gap-3">
-              <div className="w-20 h-20 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-2xl font-bold text-slate-300">
-                {userName ? userName.charAt(0).toUpperCase() : 'U'}
+      {/* MAIN VIDEO AREA & PARTICIPANTS SIDEBAR */}
+      <div className="flex-1 flex overflow-hidden relative">
+        <main className="flex-1 flex items-center justify-center p-4">
+          <div className="relative w-full max-w-4xl aspect-video bg-[#12151b] border border-slate-800/60 rounded-2xl overflow-hidden shadow-2xl flex items-center justify-center">
+            {camOn ? (
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="w-full h-full object-cover -scale-x-100"
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center gap-3">
+                <div className="w-20 h-20 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-2xl font-bold text-slate-300">
+                  {userName ? userName.charAt(0).toUpperCase() : 'U'}
+                </div>
+                <span className="text-sm text-slate-400">Camera is turned off</span>
               </div>
-              <span className="text-sm text-slate-400">Camera is turned off</span>
-            </div>
-          )}
-
-          {/* OVERLAY USER LABEL */}
-          <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium text-slate-200 border border-white/10 flex items-center gap-2">
-            <span>{userName || 'Guest'} (You)</span>
-            {!micOn && (
-              <svg className="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3l18 18" />
-              </svg>
             )}
+
+            {/* OVERLAY USER LABEL */}
+            <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-medium text-slate-200 border border-white/10 flex items-center gap-2">
+              <span>{userName || 'Guest'} (You)</span>
+              {!micOn && (
+                <svg className="w-3.5 h-3.5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3l18 18" />
+                </svg>
+              )}
+            </div>
           </div>
-        </div>
-      </main>
+        </main>
+
+        {/* PARTICIPANTS PANEL SIDEBAR */}
+        {showParticipants && (
+          <aside className="w-80 bg-[#16191e] border-l border-slate-800/80 p-4 flex flex-col justify-between z-30 animate-in slide-in-from-right duration-200">
+            <div>
+              <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-800">
+                <h3 className="font-bold text-sm text-white flex items-center gap-2">
+                  <span>Participants</span>
+                  <span className="bg-blue-600/30 text-blue-400 text-xs px-2 py-0.5 rounded-full border border-blue-500/30">
+                    {participants.length}
+                  </span>
+                </h3>
+                <button
+                  onClick={() => setShowParticipants(false)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg transition"
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* PARTICIPANT LIST */}
+              <div className="space-y-2 max-h-[calc(100vh-220px)] overflow-y-auto pr-1">
+                {participants.map((participant, index) => (
+                  <div
+                    key={participant.id || index}
+                    className="flex items-center justify-between p-2.5 rounded-xl bg-[#0d0f12] border border-slate-800/60"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-blue-600 text-white font-bold flex items-center justify-center text-xs">
+                        {participant.name ? participant.name.charAt(0).toUpperCase() : 'U'}
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-xs font-semibold text-slate-200">
+                          {participant.name} {participant.isSelf ? '(You)' : ''}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 text-slate-400">
+                      <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                      </svg>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <button
+              onClick={copyMeetingLink}
+              className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium transition flex items-center justify-center gap-2 mt-4"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+              </svg>
+              <span>Invite Participants</span>
+            </button>
+          </aside>
+        )}
+      </div>
 
       {/* BOTTOM CONTROLS BAR */}
       <footer className="p-4 bg-[#12151b]/90 border-t border-slate-800/80 backdrop-blur-lg flex items-center justify-between z-10">
@@ -289,13 +424,22 @@ export default function RoomPage() {
           </button>
         </div>
 
+        {/* PARTICIPANTS TOGGLE BUTTON */}
         <button
-          className="w-10 h-10 rounded-full bg-slate-800/80 hover:bg-slate-700 text-slate-300 flex items-center justify-center transition"
+          onClick={() => setShowParticipants(!showParticipants)}
+          className={`relative w-10 h-10 rounded-full flex items-center justify-center transition ${
+            showParticipants ? 'bg-blue-600 text-white' : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
+          }`}
           title="Participants"
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
           </svg>
+          {participants.length > 0 && (
+            <span className="absolute -top-1 -right-1 bg-blue-600 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center shadow">
+              {participants.length}
+            </span>
+          )}
         </button>
       </footer>
     </div>
