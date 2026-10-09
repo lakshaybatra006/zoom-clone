@@ -109,7 +109,6 @@ def join_meeting(room_id: str, req: JoinRequest):
 
     pid = req.participant_id or f"p_{str(uuid.uuid4())[:8]}"
     
-    # Preserve status if participant already exists in room
     existing = rooms_db[room_id]["participants"].get(pid)
     if existing:
         status = existing["status"]
@@ -158,6 +157,13 @@ def reject_participant(room_id: str, req: ActionRequest):
         return {"status": "success"}
     raise HTTPException(status_code=404, detail="Participant not found")
 
+@app.post("/api/meetings/{room_id}/leave")
+def leave_meeting(room_id: str, req: ActionRequest):
+    if room_id in rooms_db and req.participant_id in rooms_db[room_id]["participants"]:
+        del rooms_db[room_id]["participants"][req.participant_id]
+        return {"status": "success"}
+    return {"status": "not found"}
+
 # ----------------- WEBSOCKET ENDPOINT ----------------- #
 
 @app.websocket("/ws/{room_id}")
@@ -170,7 +176,6 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
     try:
         while True:
             data = await websocket.receive_text()
-            # Broadcast incoming updates to all connected sockets in the room
             for conn in websocket_connections.get(room_id, []):
                 if conn != websocket:
                     await conn.send_text(data)

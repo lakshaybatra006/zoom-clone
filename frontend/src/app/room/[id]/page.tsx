@@ -9,6 +9,9 @@ const ICE_SERVERS = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
   ],
 };
 
@@ -44,11 +47,15 @@ function RemoteVideoTile({ peer, reaction }: { peer: RemotePeer; reaction?: Acti
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    if (videoRef.current && peer.stream) {
-      videoRef.current.srcObject = peer.stream;
-      videoRef.current.play().catch((err) => {
-        console.warn('Autoplay audio interaction needed:', err);
-      });
+    const videoEl = videoRef.current;
+    if (videoEl && peer.stream) {
+      videoEl.srcObject = peer.stream;
+      const playPromise = videoEl.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          console.warn('Autoplay interaction needed for remote stream:', err);
+        });
+      }
     }
   }, [peer.stream]);
 
@@ -95,6 +102,7 @@ export default function RoomPage() {
   const [camOn, setCamOn] = useState<boolean>(true);
   const [isScreenSharing, setIsScreenSharing] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
+  const [localStreamReady, setLocalStreamReady] = useState<boolean>(false);
 
   // Sidebar Panel State: 'none' | 'participants' | 'chat'
   const [activeSidebar, setActiveSidebar] = useState<'none' | 'participants' | 'chat'>('none');
@@ -117,8 +125,21 @@ export default function RoomPage() {
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
   const peerConnections = useRef<{ [key: string]: RTCPeerConnection }>({});
+  const iceCandidatesQueue = useRef<{ [key: string]: RTCIceCandidateInit[] }>({});
   const socketRef = useRef<WebSocket | null>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  // Helper function to cleanly remove a peer connection and media stream
+  const removePeerConnection = (peerName: string) => {
+    if (peerConnections.current[peerName]) {
+      peerConnections.current[peerName].close();
+      delete peerConnections.current[peerName];
+    }
+    delete iceCandidatesQueue.current[peerName];
+
+    setRemotePeers((prev) => prev.filter((p) => p.peerId !== peerName && p.name !== peerName));
+    setAdmittedParticipants((prev) => prev.filter((p) => p.name !== peerName && p.id !== peerName));
+  };
 
   // 1. Resolve Room ID & Host Flag
   useEffect(() => {
@@ -157,6 +178,31 @@ export default function RoomPage() {
     }
   }, []);
 
+  // 3. Tab Close / Refresh Departure Handling (beforeunload)
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (socketRef.current?.readyState === WebSocket.OPEN) {
+        socketRef.current.send(JSON.stringify({
+          type: 'leave',
+          sender: userName,
+          participantId: myParticipantId,
+        }));
+      }
+
+      if (roomId && myParticipantId) {
+        navigator.sendBeacon(
+          `${API_BASE}/api/meetings/${roomId}/leave`,
+          JSON.stringify({ participant_id: myParticipantId })
+        );
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [roomId, myParticipantId, userName]);
+
   // Auto-scroll chat
   useEffect(() => {
     if (activeSidebar === 'chat') {
@@ -165,7 +211,7 @@ export default function RoomPage() {
     }
   }, [chatMessages, activeSidebar]);
 
-  // 3. Register user with room backend
+  // 4. Register user with room backend
   useEffect(() => {
     if (!hasSubmittedName || !roomId || !userName) return;
 
@@ -204,7 +250,7 @@ export default function RoomPage() {
     registerParticipant();
   }, [hasSubmittedName, roomId, userName]);
 
-  // 4. Initialize Local Camera & Microphone Stream
+  // 5. Initialize Local Camera & Microphone Stream
   useEffect(() => {
     if (myStatus !== 'admitted') return;
 
@@ -222,8 +268,10 @@ export default function RoomPage() {
         if (localVideoRef.current) {
           localVideoRef.current.srcObject = stream;
         }
+        setLocalStreamReady(true);
       } catch (err) {
         console.error('Error accessing camera/microphone:', err);
+        setLocalStreamReady(true);
       }
     }
 
@@ -236,9 +284,9 @@ export default function RoomPage() {
     };
   }, [myStatus]);
 
-  // 5. Real-Time WebRTC Peer Connection & Signaling Setup
+  // 6. Real-Time WebRTC Peer Connection & Signaling Setup
   useEffect(() => {
-    if (myStatus !== 'admitted' || !roomId || !userName) return;
+    if (myStatus !== 'admitted' || !roomId || !userName || !localStreamReady) return;
 
     const wsUrl = `${API_BASE.replace(/^http/, 'ws')}/ws/${roomId}`;
     const socket = new WebSocket(wsUrl);
@@ -255,15 +303,30 @@ export default function RoomPage() {
     socket.onmessage = async (event) => {
       try {
         const msg = JSON.parse(event.data);
-        const { type, sender, offer, answer, candidate, text, time, emoji } = msg;
+        const { type, sender, target, offer, answer, candidate, text, time, emoji } = msg;
 
-        if (sender === userName && type !== 'chat_self') return;
+        if (sender === userName) return;
+        if (target && target !== userName) return;
+
+        // Handle Participant Leaving Event
+        if (type === 'leave' || type === 'user_left') {
+          removePeerConnection(sender);
+          return;
+        }
 
         if (type === 'join') {
           createPeerConnection(sender, true);
         } else if (type === 'offer' && offer) {
           const pc = createPeerConnection(sender, false);
           await pc.setRemoteDescription(new RTCSessionDescription(offer));
+
+          if (iceCandidatesQueue.current[sender]) {
+            for (const cand of iceCandidatesQueue.current[sender]) {
+              await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+            }
+            iceCandidatesQueue.current[sender] = [];
+          }
+
           const ans = await pc.createAnswer();
           await pc.setLocalDescription(ans);
           socket.send(JSON.stringify({
@@ -276,11 +339,23 @@ export default function RoomPage() {
           const pc = peerConnections.current[sender];
           if (pc) {
             await pc.setRemoteDescription(new RTCSessionDescription(answer));
+
+            if (iceCandidatesQueue.current[sender]) {
+              for (const cand of iceCandidatesQueue.current[sender]) {
+                await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+              }
+              iceCandidatesQueue.current[sender] = [];
+            }
           }
         } else if (type === 'candidate' && candidate) {
           const pc = peerConnections.current[sender];
-          if (pc) {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+          } else {
+            if (!iceCandidatesQueue.current[sender]) {
+              iceCandidatesQueue.current[sender] = [];
+            }
+            iceCandidatesQueue.current[sender].push(candidate);
           }
         } else if (type === 'chat') {
           const newMsg: ChatMessage = {
@@ -314,6 +389,17 @@ export default function RoomPage() {
       const pc = new RTCPeerConnection(ICE_SERVERS);
       peerConnections.current[peerName] = pc;
 
+      // Detect connection state drops and clean up tile immediately
+      pc.onconnectionstatechange = () => {
+        if (
+          pc.connectionState === 'disconnected' ||
+          pc.connectionState === 'failed' ||
+          pc.connectionState === 'closed'
+        ) {
+          removePeerConnection(peerName);
+        }
+      };
+
       const activeStream = screenStreamRef.current || localStreamRef.current;
       if (activeStream) {
         activeStream.getTracks().forEach((track) => {
@@ -322,10 +408,22 @@ export default function RoomPage() {
       }
 
       pc.ontrack = (evt) => {
-        const remoteStream = evt.streams[0];
+        const remoteTrack = evt.track;
+        const incomingStream = evt.streams[0] || new MediaStream([remoteTrack]);
+
         setRemotePeers((prev) => {
-          if (prev.some((p) => p.peerId === peerName)) return prev;
-          return [...prev, { peerId: peerName, name: peerName, stream: remoteStream }];
+          const existingIndex = prev.findIndex((p) => p.peerId === peerName || p.name === peerName);
+          if (existingIndex !== -1) {
+            const existingPeer = prev[existingIndex];
+            if (!existingPeer.stream.getTracks().some((t) => t.id === remoteTrack.id)) {
+              existingPeer.stream.addTrack(remoteTrack);
+            }
+            const updated = [...prev];
+            updated[existingIndex] = { ...existingPeer };
+            return updated;
+          } else {
+            return [...prev, { peerId: peerName, name: peerName, stream: incomingStream }];
+          }
         });
       };
 
@@ -362,9 +460,9 @@ export default function RoomPage() {
       Object.values(peerConnections.current).forEach((pc) => pc.close());
       peerConnections.current = {};
     };
-  }, [myStatus, roomId, userName, myParticipantId, activeSidebar]);
+  }, [myStatus, roomId, userName, myParticipantId, localStreamReady, activeSidebar]);
 
-  // 6. Polling Room State & Triggering WebRTC Connection for Admitted Users
+  // 7. Polling Room State & Automatic Cleanup for Disconnected Participants
   useEffect(() => {
     if (!hasSubmittedName || !roomId) return;
 
@@ -377,6 +475,10 @@ export default function RoomPage() {
           setAdmittedParticipants(admittedList);
           setWaitingParticipants(data.waiting || []);
           if (data.host_name) setHostName(data.host_name);
+
+          // Purge any remote peer tiles and streams whose names are no longer in admittedList
+          const admittedNames = new Set(admittedList.map((p: Participant) => p.name));
+          setRemotePeers((prev) => prev.filter((peer) => admittedNames.has(peer.name) || admittedNames.has(peer.peerId)));
 
           if (myParticipantId) {
             const meInAdmitted = admittedList.find((p: Participant) => p.id === myParticipantId || p.name === userName);
@@ -558,13 +660,38 @@ export default function RoomPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleEndMeeting = () => {
+  // End / Leave Meeting Handler
+  const handleEndMeeting = async () => {
+    // 1. Broadcast WebSocket leave message
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({
+        type: 'leave',
+        sender: userName,
+        participantId: myParticipantId,
+      }));
+    }
+
+    // 2. Call Backend API to remove participant from database state
+    if (roomId && myParticipantId) {
+      try {
+        await fetch(`${API_BASE}/api/meetings/${roomId}/leave`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ participant_id: myParticipantId }),
+        });
+      } catch (e) {}
+    }
+
+    // 3. Stop local tracks & peer connections
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
     }
     if (screenStreamRef.current) {
       screenStreamRef.current.getTracks().forEach((track) => track.stop());
     }
+    Object.values(peerConnections.current).forEach((pc) => pc.close());
+    peerConnections.current = {};
+
     router.push('/');
   };
 
@@ -695,7 +822,7 @@ export default function RoomPage() {
       <div className="flex-1 flex overflow-hidden relative">
         <main className="flex-1 flex items-center justify-center p-4">
           <div className={`w-full max-w-6xl h-full grid gap-4 items-center justify-center ${
-            admittedParticipants.length > 1 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'
+            admittedParticipants.filter((p) => p.name !== userName && p.id !== myParticipantId).length > 0 ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1'
           }`}>
             
             {/* LOCAL USER TILE (YOU) */}
@@ -911,7 +1038,6 @@ export default function RoomPage() {
 
       {/* BOTTOM CONTROLS TOOLBAR */}
       <footer className="p-4 bg-[#12151b]/90 border-t border-slate-800/80 backdrop-blur-lg flex items-center justify-between z-10 relative">
-        {/* BRANDING SPACER (REPLACES PREVIOUS EXIT ARROW) */}
         <div className="hidden md:flex items-center gap-2">
           <div className="bg-blue-600 text-white p-1 rounded">
             <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
@@ -924,7 +1050,6 @@ export default function RoomPage() {
         {/* CENTER TOOLBAR BUTTONS */}
         <div className="flex items-center gap-3 md:gap-4 relative">
           
-          {/* Microphone Toggle */}
           <button
             onClick={toggleMic}
             className={`w-12 h-12 rounded-full flex items-center justify-center transition shadow-lg ${
@@ -937,7 +1062,6 @@ export default function RoomPage() {
             </svg>
           </button>
 
-          {/* Camera Toggle */}
           <button
             onClick={toggleCam}
             className={`w-12 h-12 rounded-full flex items-center justify-center transition shadow-lg ${
@@ -950,7 +1074,6 @@ export default function RoomPage() {
             </svg>
           </button>
 
-          {/* Screen Share Button */}
           <button
             onClick={toggleScreenShare}
             className={`w-12 h-12 rounded-full flex items-center justify-center transition shadow-lg ${
@@ -963,7 +1086,6 @@ export default function RoomPage() {
             </svg>
           </button>
 
-          {/* Emoji Reactions Picker */}
           <div className="relative">
             <button
               onClick={() => setShowEmojiPicker(!showEmojiPicker)}
@@ -988,7 +1110,6 @@ export default function RoomPage() {
             )}
           </div>
 
-          {/* End Meeting Button */}
           <button
             onClick={handleEndMeeting}
             className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-full flex items-center gap-2 transition shadow-lg shadow-red-600/30"
@@ -999,7 +1120,6 @@ export default function RoomPage() {
 
         {/* RIGHT SIDEBAR TOGGLES */}
         <div className="flex items-center gap-2">
-          {/* Chat Toggle */}
           <button
             onClick={() => {
               setActiveSidebar(activeSidebar === 'chat' ? 'none' : 'chat');
@@ -1020,7 +1140,6 @@ export default function RoomPage() {
             )}
           </button>
 
-          {/* Participants Toggle */}
           <button
             onClick={() => setActiveSidebar(activeSidebar === 'participants' ? 'none' : 'participants')}
             className={`relative w-10 h-10 rounded-full flex items-center justify-center transition ${
